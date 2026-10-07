@@ -1,0 +1,17 @@
+// HOOK: OUTPUT
+// QUEST DIRECTOR v1.0.0
+
+
+const modifier = (text) => {
+
+// YOUR OTHER SCRIPTS OUPUTS GOES ABOVE THIS
+
+  text =
+    QuestDirector.output(text);
+
+  return {
+    text
+  };
+};
+
+modifier(text);
