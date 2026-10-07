@@ -1,0 +1,14 @@
+// HOOK: CONTEXT
+// QUEST DIRECTOR v1.0.0
+
+const modifier = (text) => {
+
+// YOUR OTHER SCRIPTS CONTEXT GOES ABOVE THIS
+
+  const result =
+    QuestDirector.context(text);
+
+  return result;
+};
+
+modifier(text);
