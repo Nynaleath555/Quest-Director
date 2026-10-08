@@ -27,7 +27,7 @@
 const QUEST_DIRECTOR_ENABLED = true;
 
 /*
-Chance of asking the model to SEARCH FOR A NEW QUEST on an eligible turn.
+Chance of creating a new quest once the cooldown has ended.
 
 0.10 = rare
 0.20 = occasional / balanced
@@ -36,10 +36,12 @@ Chance of asking the model to SEARCH FOR A NEW QUEST on an eligible turn.
 const QUEST_ACTIVATION_CHANCE = 0.22;
 
 /*
-Minimum number of turns between new-quest searches.
-Active quests are still checked for completion every turn.
+Minimum number of turns that must pass after a QUEST IS CREATED
+before the script can attempt to create another one.
+
+After the cooldown ends, the probability is checked every turn.
 */
-const MIN_TURNS_BETWEEN_EVALUATIONS = 6;
+const MIN_TURNS_BETWEEN_QUESTS = 6;
 
 /*
 Maximum number of active quests at once.
@@ -284,8 +286,6 @@ function QD_CreateState() {
 
     expiredQuests: [],
 
-    lastEvaluationTurn: -999999,
-
     lastQuestTurn: -999999,
 
     nextQuestNumber: 1,
@@ -326,14 +326,6 @@ function QD_GetState() {
 
   if (!Array.isArray(s.expiredQuests)) {
     s.expiredQuests = [];
-  }
-
-  if (
-    !Number.isFinite(
-      Number(s.lastEvaluationTurn)
-    )
-  ) {
-    s.lastEvaluationTurn = -999999;
   }
 
   if (
@@ -2408,37 +2400,61 @@ const QuestDirector = {
     s.pendingEvaluation =
       null;
 
-    const lastEvaluation =
-      QD_Number(
-        s.lastEvaluationTurn,
-        -999999
-      );
+   const lastQuest =
+  QD_Number(
+    s.lastQuestTurn,
+    -999999
+  );
+const lastQuest =
+  QD_Number(
+    s.lastQuestTurn,
+    -999999
+  );
 
-    const enoughTimePassed =
-      turn -
-        lastEvaluation >=
-      MIN_TURNS_BETWEEN_EVALUATIONS;
+const cooldownFinished =
+  turn -
+    lastQuest >=
+  MIN_TURNS_BETWEEN_QUESTS;
 
-    let allowNewQuest =
-      false;
+let allowNewQuest =
+  false;
 
-    if (
-      enoughTimePassed &&
-      s.activeQuests.length <
-        MAX_ACTIVE_QUESTS &&
-      Math.random() <
-        QD_Clamp(
-          QUEST_ACTIVATION_CHANCE,
-          0,
-          1
-        )
-    ) {
-      allowNewQuest =
-        true;
+if (
+  cooldownFinished &&
+  s.activeQuests.length <
+    MAX_ACTIVE_QUESTS &&
+  Math.random() <
+    QD_Clamp(
+      QUEST_ACTIVATION_CHANCE,
+      0,
+      1
+    )
+) {
+  allowNewQuest =
+    true;
+}
+const cooldownFinished =
+  turn -
+    lastQuest >=
+  MIN_TURNS_BETWEEN_QUESTS;
 
-      s.lastEvaluationTurn =
-        turn;
-    }
+let allowNewQuest =
+  false;
+
+if (
+  cooldownFinished &&
+  s.activeQuests.length <
+    MAX_ACTIVE_QUESTS &&
+  Math.random() <
+    QD_Clamp(
+      QUEST_ACTIVATION_CHANCE,
+      0,
+      1
+    )
+) {
+  allowNewQuest =
+    true;
+}
 
     const hasActiveQuests =
       s.activeQuests.length >
