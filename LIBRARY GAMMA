@@ -2399,7 +2399,7 @@ const QuestDirector = {
 
 const cooldownFinished =
   turn -
-    lastQuestTurn >=
+    s.lastQuestTurn >=
   MIN_TURNS_BETWEEN_QUESTS;
 
 let allowNewQuest =
