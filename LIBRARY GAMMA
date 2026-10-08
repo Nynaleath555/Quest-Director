@@ -85,11 +85,6 @@ Maximum chain depth.
 const MAX_CHAIN_DEPTH = 3;
 
 /*
-Minimum confidence required before the script accepts a new quest.
-*/
-
-
-/*
 Higher threshold required for a quest chain.
 */
 const MIN_CHAIN_SCORE = 82;
@@ -1610,7 +1605,6 @@ function QD_BuildPrompt(
     `SIDE QUESTS ALLOWED: ${sideAllowed}\n` +
     `QUEST CHAINS ALLOWED: ${chainsAllowed}\n` +
     `MAX ACTIVE QUESTS: ${MAX_ACTIVE_QUESTS}\n` +
-    `MIN QUEST SCORE: ${MIN_QUEST_SCORE}\n` +
     `MIN CHAIN SCORE: ${MIN_CHAIN_SCORE}\n\n` +
 
     "ACTIVE QUESTS:\n" +
@@ -1665,29 +1659,15 @@ function QD_BuildPrompt(
 
     "At the very end of your response, after the normal story prose, output EXACTLY one machine envelope:\n\n" +
 
-    QD_RESULT_START + "\n" +
+   QD_RESULT_START + "\n" +
 
-    QD_RESULT_START + "\n" +
-
-    "{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"chainFrom\":null,\"reason\":\"Brief internal justification\"}}" +
+"{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"chainFrom\":null,\"reason\":\"Brief internal justification\"}}" +
 
 "\n" +
 
 QD_RESULT_END +
 
-    "\n" +
-
-    QD_RESULT_END +
-
-    "\n\n" +
-
-    QD_RESULT_START + "\n" +
-
-    "{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"chainFrom\":null,\"reason\":\"Brief internal justification\"}}" +
-
-    "\n" +
-
-    QD_RESULT_END +
+"\n\n" +
 
     "\n\n" +
 
