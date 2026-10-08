@@ -1578,7 +1578,7 @@ function QD_BuildPrompt(
     "CORE RULE:\n" +
     "A quest is an invitation toward something meaningful, not a generic chore and not an RPG checklist.\n\n" +
 
-    "A strong opportunity can come from any combination of:\n" +
+    "A opportunity can come from any combination of:\n" +
     "- a current event\n" +
     "- an old Story Card\n" +
     "- a character or NPC\n" +
