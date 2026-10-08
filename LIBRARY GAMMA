@@ -1581,7 +1581,6 @@ function QD_BuildPrompt(
     "\n\n" +
 
     "CORE RULE:\n" +
-    "Only create a quest when there is a genuinely strong NARRATIVE OPPORTUNITY.\n" +
     "A quest is an invitation toward something meaningful, not a generic chore and not an RPG checklist.\n\n" +
 
     "A strong opportunity can come from any combination of:\n" +
@@ -1637,9 +1636,7 @@ function QD_BuildPrompt(
 
     "NEW QUEST RULE:\n" +
     "Create at most ONE new quest this turn.\n" +
-    "If NEW QUEST SEARCH ENABLED is NO, quest MUST be null.\n" +
-    "If no sufficiently strong opportunity exists, quest MUST be null.\n" +
-    "Never invent a quest simply to fill the format.\n\n" +
+   
 
     "CHAIN RULE:\n" +
     "A chain quest must use chainFrom with a completed quest ID and must feel like a direct natural continuation.\n" +
@@ -2400,39 +2397,6 @@ const QuestDirector = {
     s.pendingEvaluation =
       null;
 
-   const lastQuest =
-  QD_Number(
-    s.lastQuestTurn,
-    -999999
-  );
-const lastQuest =
-  QD_Number(
-    s.lastQuestTurn,
-    -999999
-  );
-
-const cooldownFinished =
-  turn -
-    lastQuest >=
-  MIN_TURNS_BETWEEN_QUESTS;
-
-let allowNewQuest =
-  false;
-
-if (
-  cooldownFinished &&
-  s.activeQuests.length <
-    MAX_ACTIVE_QUESTS &&
-  Math.random() <
-    QD_Clamp(
-      QUEST_ACTIVATION_CHANCE,
-      0,
-      1
-    )
-) {
-  allowNewQuest =
-    true;
-}
 const cooldownFinished =
   turn -
     lastQuest >=
