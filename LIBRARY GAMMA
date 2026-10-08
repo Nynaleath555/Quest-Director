@@ -87,7 +87,7 @@ const MAX_CHAIN_DEPTH = 3;
 /*
 Minimum confidence required before the script accepts a new quest.
 */
-const MIN_QUEST_SCORE = 72;
+
 
 /*
 Higher threshold required for a quest chain.
@@ -1605,7 +1605,7 @@ function QD_BuildPrompt(
 
     "The objective must point toward the opportunity WITHOUT revealing the exact discovery, twist, culprit, reward, secret, or consequence that will emerge through normal story play.\n\n" +
 
-    `NEW QUEST SEARCH ENABLED THIS TURN: ${allowNewQuest ? "YES" : "NO"}\n` +
+    `NEW QUEST GENERATION AUTHORIZED THIS TURN: ${allowNewQuest ? "YES" : "NO"}\n` +
     `MAIN QUESTS ALLOWED: ${mainAllowed}\n` +
     `SIDE QUESTS ALLOWED: ${sideAllowed}\n` +
     `QUEST CHAINS ALLOWED: ${chainsAllowed}\n` +
@@ -1635,8 +1635,10 @@ function QD_BuildPrompt(
     "Only use active quest IDs that were supplied above.\n\n" +
 
     "NEW QUEST RULE:\n" +
-    "Create at most ONE new quest this turn.\n" +
-   
+    "Quest activation has already been decided by the script.\n" +
+    "Do not decide whether a quest should be created.\n" +
+    "This turn is authorized for exactly ONE new quest generation.\n" +
+    "Generate ONE quest now.\n\n" +
 
     "CHAIN RULE:\n" +
     "A chain quest must use chainFrom with a completed quest ID and must feel like a direct natural continuation.\n" +
@@ -1665,15 +1667,19 @@ function QD_BuildPrompt(
 
     QD_RESULT_START + "\n" +
 
-    "{\"language\":\"en\",\"complete\":[],\"quest\":null}" +
+    QD_RESULT_START + "\n" +
+
+    "{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"chainFrom\":null,\"reason\":\"Brief internal justification\"}}" +
+
+"\n" +
+
+QD_RESULT_END +
 
     "\n" +
 
     QD_RESULT_END +
 
     "\n\n" +
-
-    "Or, when creating a quest:\n\n" +
 
     QD_RESULT_START + "\n" +
 
@@ -1829,24 +1835,9 @@ function QD_ValidQuestCandidate(
       candidate.type
     );
 
-  const score =
-    Number(
-      candidate.score
-    );
-
   if (
     title.length < 3 ||
     objective.length < 8
-  ) {
-    return false;
-  }
-
-  if (
-    !Number.isFinite(
-      score
-    ) ||
-    score <
-      MIN_QUEST_SCORE
   ) {
     return false;
   }
@@ -2061,12 +2052,12 @@ function QD_ApplyResult(
         chainFrom
       ) {
         if (
-          !ALLOW_QUEST_CHAINS ||
-          score <
-            MIN_CHAIN_SCORE
-        ) {
-          return changed;
-        }
+  !ALLOW_QUEST_CHAINS ||
+  score < MIN_CHAIN_SCORE
+) {
+  chainFrom =
+    "";
+}
 
         const parent =
           s.completedQuests.find(
@@ -2077,9 +2068,12 @@ function QD_ApplyResult(
               chainFrom
           );
 
-        if (!parent) {
-          return changed;
-        }
+        if (
+  !parent
+) {
+  chainFrom =
+    "";
+}
 
         chainDepth =
           QD_Number(
@@ -2370,96 +2364,96 @@ const QuestDirector = {
      INPUT HOOK
      ---------------------------------------------------------- */
 
-  input(text) {
-    const s =
-      QD_GetState();
+ input(text) {
+  const s =
+    QD_GetState();
 
-    if (
-      !s ||
-      !QUEST_DIRECTOR_ENABLED
-    ) {
-      return text;
-    }
-
-    const turn =
-      QD_Turn();
-
-    const expired =
-      QD_ExpireOldQuests(
-        s,
-        turn
-      );
-
-    /*
-    Every evaluation request is one-shot.
-    */
-
-    s.pendingEvaluation =
-      null;
-
-const cooldownFinished =
-  turn -
-    s.lastQuestTurn >=
-  MIN_TURNS_BETWEEN_QUESTS;
-
-let allowNewQuest =
-  false;
-
-if (
-  cooldownFinished &&
-  s.activeQuests.length <
-    MAX_ACTIVE_QUESTS &&
-  Math.random() <
-    QD_Clamp(
-      QUEST_ACTIVATION_CHANCE,
-      0,
-      1
-    )
-) {
-  allowNewQuest =
-    true;
-}
-
-    const hasActiveQuests =
-      s.activeQuests.length >
-      0;
-
-    /*
-    Active quests are checked for completion every turn,
-    without requiring another model generation.
-    */
-
-    if (
-      hasActiveQuests ||
-      allowNewQuest ||
-      expired
-    ) {
-      s.pendingEvaluation = {
-        turn,
-        allowNewQuest
-      };
-    }
-
-    /*
-    Only touch the display card when necessary.
-    */
-
-    if (
-      !SHOW_QUEST_DISPLAY ||
-      expired ||
-      (
-        s.activeQuests.length >
-          0 &&
-        !QD_FindDisplayCard()
-      )
-    ) {
-      QD_UpdateDisplayCard(
-        s
-      );
-    }
-
+  if (
+    !s ||
+    !QUEST_DIRECTOR_ENABLED
+  ) {
     return text;
-  },
+  }
+
+  const turn =
+    QD_Turn();
+
+  const expired =
+    QD_ExpireOldQuests(
+      s,
+      turn
+    );
+
+  /*
+  A quest-generation request is one-shot.
+  It exists only when the activation roll succeeds.
+  */
+
+  s.pendingEvaluation =
+    null;
+
+  const cooldownFinished =
+    turn -
+      s.lastQuestTurn >=
+    MIN_TURNS_BETWEEN_QUESTS;
+
+  let allowNewQuest =
+    false;
+
+  if (
+    cooldownFinished &&
+    s.activeQuests.length <
+      MAX_ACTIVE_QUESTS &&
+    Math.random() <
+      QD_Clamp(
+        QUEST_ACTIVATION_CHANCE,
+        0,
+        1
+      )
+  ) {
+    allowNewQuest =
+      true;
+  }
+
+  /*
+  IMPORTANT:
+  Active quests and expired quests must NOT trigger
+  a model-context injection by themselves.
+
+  Only a successful activation roll may request
+  a Quest Director generation pass.
+  */
+
+  if (
+    allowNewQuest
+  ) {
+    s.pendingEvaluation = {
+      turn,
+      allowNewQuest: true
+    };
+  }
+
+  /*
+  Display maintenance is local script work.
+  It does not request an AI generation.
+  */
+
+  if (
+    !SHOW_QUEST_DISPLAY ||
+    expired ||
+    (
+      s.activeQuests.length >
+        0 &&
+      !QD_FindDisplayCard()
+    )
+  ) {
+    QD_UpdateDisplayCard(
+      s
+    );
+  }
+
+  return text;
+},
 
 
   /* ----------------------------------------------------------
