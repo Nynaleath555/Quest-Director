@@ -1957,6 +1957,11 @@ function QD_ApplyResult(
       .allowNewQuest === true &&
     QD_ValidQuestCandidate(
       data.quest
+   !QD_IsDuplicateQuest(
+    s,
+    data.quest.title,
+    data.quest.objective
+)
     )
   ) {
     const candidate =
