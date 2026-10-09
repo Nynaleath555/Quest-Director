@@ -1,0 +1,14 @@
+// Quest Director v1.0.0 Beta
+// Hook: OUTPUT
+// Creator: Nynaleath
+
+const modifier = (text) => {
+  
+ // YOUR OTHER SCRIPTS' OUTPUT HOOKS GO ABOVE THIS
+
+  text = QuestDirector.output(text);
+
+  return { text };
+};
+
+modifier(text);
