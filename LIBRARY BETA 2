@@ -2523,7 +2523,10 @@ const QuestDirector = {
 
     const parsed =
       QD_ExtractResult(
-        text
+        text;
+    const turn = QD_Turn();
+    const expired = QD_ExpireOldQuests(s, turn);
+    const hadPending = !!s.pendingEvaluation;
       );
 
     /*
@@ -2533,6 +2536,22 @@ const QuestDirector = {
     if (
       !parsed.found
     ) {
+
+    if (!parsed.found) {
+     QD_Log("Output without result envelope", { hadPending });
+
+    s.pendingEvaluation = null;
+
+  if (
+    !SHOW_QUEST_DISPLAY ||
+    expired ||
+    (s.activeQuests.length > 0 && !QD_FindDisplayCard())
+  ) {
+    QD_UpdateDisplayCard(s);
+  }
+
+  return text || "\u200B";
+}
       s.pendingEvaluation =
         null;
 
