@@ -1621,7 +1621,7 @@ function QD_BuildPrompt(
 
    QD_RESULT_START + "\n" +
 
-"{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"chainFrom\":null,\"reason\":\"Brief internal justification\"}}" +
+"{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"reason\":\"Brief internal justification\"}}" +
 
 "\n" +
 
@@ -2028,7 +2028,7 @@ function QD_ApplyResult(
         );
       }
     }
-  }
+  
 
   return changed;
 }
