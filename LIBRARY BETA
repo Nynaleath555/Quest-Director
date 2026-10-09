@@ -1,5 +1,5 @@
 // HOOK: LIBRARY
-// QUEST DIRECTOR v1.0.0 GAMMA
+// QUEST DIRECTOR v1.0.0 BETA
 // LICENSE: MIT
 // Creator: Nynaleath
 //
@@ -69,25 +69,6 @@ const ALLOW_MAIN_STORY_QUESTS = true;
 Allow the model to create side quests.
 */
 const ALLOW_SIDE_QUESTS = true;
-
-/*
-Allow quests to naturally lead into follow-up quests.
-*/
-const ALLOW_QUEST_CHAINS = true;
-
-/*
-Maximum chain depth.
-0 = original quest
-1 = first follow-up
-2 = second follow-up
-3 = third follow-up
-*/
-const MAX_CHAIN_DEPTH = 3;
-
-/*
-Higher threshold required for a quest chain.
-*/
-const MIN_CHAIN_SCORE = 82;
 
 /*
 "auto" = match the dominant English/Spanish language of the story.
@@ -441,12 +422,6 @@ function QD_RecordCompletion(
     objective: quest.objective,
 
     kind: quest.kind,
-
-    chainDepth:
-      QD_Number(
-        quest.chainDepth,
-        0
-      ),
 
     completedTurn: turn,
 
@@ -1460,10 +1435,7 @@ function QD_SerializeActiveQuests(s) {
             quest.objective,
             260
           )}`,
-          `chainDepth=${QD_Number(
-            quest.chainDepth,
-            0
-          )}`
+          
         ].join(" | ")
     )
     .join("\n");
@@ -1487,10 +1459,7 @@ function QD_SerializeCompletedQuests(s) {
             quest.title,
             100
           )}`,
-          `chainDepth=${QD_Number(
-            quest.chainDepth,
-            0
-          )}`
+
         ].join(" | ")
     )
     .join("\n");
@@ -1552,10 +1521,6 @@ function QD_BuildPrompt(
       ? "YES"
       : "NO";
 
-  const chainsAllowed =
-    ALLOW_QUEST_CHAINS
-      ? "YES"
-      : "NO";
 
   return (
     "\n\n" +
@@ -1603,9 +1568,7 @@ function QD_BuildPrompt(
     `NEW QUEST GENERATION AUTHORIZED THIS TURN: ${allowNewQuest ? "YES" : "NO"}\n` +
     `MAIN QUESTS ALLOWED: ${mainAllowed}\n` +
     `SIDE QUESTS ALLOWED: ${sideAllowed}\n` +
-    `QUEST CHAINS ALLOWED: ${chainsAllowed}\n` +
     `MAX ACTIVE QUESTS: ${MAX_ACTIVE_QUESTS}\n` +
-    `MIN CHAIN SCORE: ${MIN_CHAIN_SCORE}\n\n` +
 
     "ACTIVE QUESTS:\n" +
     QD_SerializeActiveQuests(s) +
@@ -1633,11 +1596,8 @@ function QD_BuildPrompt(
     "Do not decide whether a quest should be created.\n" +
     "This turn is authorized for exactly ONE new quest generation.\n" +
     "Generate ONE quest now.\n\n" +
-
-    "CHAIN RULE:\n" +
-    "A chain quest must use chainFrom with a completed quest ID and must feel like a direct natural continuation.\n" +
-    "Never chain merely because another quest exists.\n\n" +
-
+    "Generate standalone quests, without mechanically linking them to completed quests. Continue basing every quest on established lore, characters, locations, current events, and story continuity.\n\n" +
+   
     "EVENT PARADOX RULE:\n" +
     "Never fire, complete, rewrite, satisfy, or alter a deterministic Event Paradox event.\n" +
     "Treat Event Paradox information as existing world state only.\n\n" +
@@ -2012,65 +1972,6 @@ function QD_ApplyResult(
         )
       );
 
-    const chainFrom =
-      QD_Clean(
-        candidate.chainFrom
-      );
-
-    if (
-      !QD_IsDuplicateQuest(
-        s,
-        title,
-        objective
-      )
-    ) {
-      let chainDepth = 0;
-
-      let validChain = false;
-
-      if (
-        chainFrom
-      ) {
-        if (
-  !ALLOW_QUEST_CHAINS ||
-  score < MIN_CHAIN_SCORE
-) {
-  chainFrom =
-    "";
-}
-
-        const parent =
-          s.completedQuests.find(
-            (quest) =>
-              QD_Clean(
-                quest.id
-              ) ===
-              chainFrom
-          );
-
-        if (
-  !parent
-) {
-  chainFrom =
-    "";
-}
-
-        chainDepth =
-          QD_Number(
-            parent.chainDepth,
-            0
-          ) + 1;
-
-        if (
-          chainDepth >
-          MAX_CHAIN_DEPTH
-        ) {
-          return changed;
-        }
-
-        validChain =
-          true;
-      }
 
       if (
         s.activeQuests.length <
@@ -2110,13 +2011,6 @@ function QD_ApplyResult(
               ? turn +
                 QUEST_EXPIRATION_TURNS
               : null,
-
-          chainFrom:
-            validChain
-              ? chainFrom
-              : null,
-
-          chainDepth
         };
 
         s.activeQuests.push(
