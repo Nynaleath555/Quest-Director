@@ -1795,74 +1795,47 @@ function QD_ExtractResult(text) {
 /* ============================================================
    QUEST VALIDATION
    ============================================================ */
+function QD_ValidQuestCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
 
-function QD_ValidQuestCandidate(
-  candidate
-) {
+  candidate.title = QD_Clean(candidate.title);
+  candidate.objective = QD_Clean(candidate.objective);
+
+  // Solo estos dos campos son imprescindibles.
+  if (candidate.title.length < 2 || candidate.objective.length < 4) {
+    return false;
+  }
+
+  let kind = QD_Lower(candidate.kind) || "side";
+  let type = QD_Lower(candidate.type) || "story";
+
+  if (!["main", "side"].includes(kind)) {
+    kind = "side";
+  }
+
+  if (!QD_VALID_TYPES.includes(type)) {
+    type = "story";
+  }
+
+  if (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) {
+    kind = "side";
+  }
+
+  if (kind === "side" && !ALLOW_SIDE_QUESTS) {
+    kind = "main";
+  }
+
   if (
-    !candidate ||
-    typeof candidate !==
-      "object"
+    (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) ||
+    (kind === "side" && !ALLOW_SIDE_QUESTS)
   ) {
     return false;
   }
 
-  const title =
-    QD_Clean(
-      candidate.title
-    );
-
-  const objective =
-    QD_Clean(
-      candidate.objective
-    );
-
-  const kind =
-    QD_Lower(
-      candidate.kind
-    );
-
-  const type =
-    QD_Lower(
-      candidate.type
-    );
-
-  if (
-    title.length < 3 ||
-    objective.length < 8
-  ) {
-    return false;
-  }
-
-  if (
-    !["main", "side"].includes(
-      kind
-    )
-  ) {
-    return false;
-  }
-
-  if (
-    !QD_VALID_TYPES.includes(
-      type
-    )
-  ) {
-    return false;
-  }
-
-  if (
-    kind === "main" &&
-    !ALLOW_MAIN_STORY_QUESTS
-  ) {
-    return false;
-  }
-
-  if (
-    kind === "side" &&
-    !ALLOW_SIDE_QUESTS
-  ) {
-    return false;
-  }
+  candidate.kind = kind;
+  candidate.type = type;
 
   return true;
 }
