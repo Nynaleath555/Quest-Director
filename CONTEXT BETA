@@ -1,0 +1,13 @@
+// Quest Director v1.0.0 Beta
+// Hook: CONTEXT
+// Creator: Nynaleath
+
+const modifier = (text) => {
+  // YOUR OTHER SCRIPTS' CONTEXT HOOKS GO ABOVE THIS
+
+  const result = QuestDirector.context(text);
+
+  return result;
+};
+
+modifier(text);
