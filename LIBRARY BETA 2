@@ -1435,7 +1435,7 @@ function QD_SerializeActiveQuests(s) {
             quest.objective,
             260
           )}`,
-          
+
         ].join(" | ")
     )
     .join("\n");
@@ -1597,7 +1597,7 @@ function QD_BuildPrompt(
     "This turn is authorized for exactly ONE new quest generation.\n" +
     "Generate ONE quest now.\n\n" +
     "Generate standalone quests, without mechanically linking them to completed quests. Continue basing every quest on established lore, characters, locations, current events, and story continuity.\n\n" +
-   
+
     "EVENT PARADOX RULE:\n" +
     "Never fire, complete, rewrite, satisfy, or alter a deterministic Event Paradox event.\n" +
     "Treat Event Paradox information as existing world state only.\n\n" +
@@ -1619,15 +1619,15 @@ function QD_BuildPrompt(
 
     "At the very end of your response, after the normal story prose, output EXACTLY one machine envelope:\n\n" +
 
-   QD_RESULT_START + "\n" +
+    QD_RESULT_START + "\n" +
 
-"{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"reason\":\"Brief internal justification\"}}" +
+    "{\"language\":\"en\",\"complete\":[],\"quest\":{\"kind\":\"side\",\"type\":\"investigation\",\"title\":\"Short title\",\"objective\":\"Natural invitation without revealing the payoff\",\"score\":84,\"reason\":\"Brief internal justification\"}}" +
 
-"\n" +
+    "\n" +
 
-QD_RESULT_END +
+    QD_RESULT_END +
 
-"\n\n" +
+    "\n\n" +
 
     "\n\n" +
 
@@ -1657,9 +1657,7 @@ function QD_ExtractResult(text) {
       QD_RESULT_START
     );
 
-  if (
-    start < 0
-  ) {
+  if (start < 0) {
     return {
       found: false,
       cleanText: source,
@@ -1667,16 +1665,16 @@ function QD_ExtractResult(text) {
     };
   }
 
+  const bodyStart =
+    start + QD_RESULT_START.length;
+
   const end =
     source.indexOf(
       QD_RESULT_END,
-      start +
-        QD_RESULT_START.length
+      bodyStart
     );
 
-  if (
-    end < 0
-  ) {
+  if (end < 0) {
     return {
       found: false,
       cleanText: source,
@@ -1687,143 +1685,101 @@ function QD_ExtractResult(text) {
   const jsonText =
     source
       .slice(
-        start +
-          QD_RESULT_START.length,
+        bodyStart,
         end
       )
       .trim()
       .replace(
-        /^```json\s*/i,
+        /^\x60\x60\x60json\s*/i,
         ""
       )
       .replace(
-        /^```\s*/i,
+        /^\x60\x60\x60\s*/i,
         ""
       )
       .replace(
-        /\s*```$/i,
+        /\s*\x60\x60\x60$/i,
         ""
-      )
-function QD_ExtractResult(text) {
-  const source = QD_String(text);
+      );
 
-  const startMatch = /<<<\s*QD_RESULT\s*>>>/i.exec(source);
+  const after =
+    end + QD_RESULT_END.length;
 
-  if (!startMatch) {
-    return {
-      found: false,
-      cleanText: source,
-      data: null
-    };
-  }
-
-  const bodyStart = startMatch.index + startMatch[0].length;
-  const tail = source.slice(bodyStart);
-  const endMatch = /<<<\s*END_QD_RESULT\s*>>>/i.exec(tail);
-
-  if (!endMatch) {
-    return {
-      found: false,
-      cleanText: source,
-      data: null
-    };
-  }
-
-  const endStart = bodyStart + endMatch.index;
-  const body = source.slice(bodyStart, endStart);
-
-  const after = endStart + endMatch[0].length;
   const cleanText = (
-    source.slice(0, startMatch.index) +
+    source.slice(0, start) +
     source.slice(after)
   ).trim();
 
-  const fields = {};
-
-  for (const line of body.split(/\r?\n/)) {
-    const match = line.match(
-      /^\s*(?:[-*]\s*)?([a-z_ ]+)\s*:\s*(.*?)\s*$/i
-    );
-
-    if (!match) continue;
-
-    const key = match[1]
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "_");
-
-    fields[key] = match[2].trim();
+  try {
+    return {
+      found: true,
+      cleanText,
+      data: JSON.parse(jsonText)
+    };
+  } catch (_) {
+    return {
+      found: true,
+      cleanText,
+      data: null
+    };
   }
-
-  const completedText = fields.complete || "";
-
-  const complete = /^(none|ninguno|ninguna)$/i.test(completedText)
-    ? []
-    : completedText
-        .split(/[,;]\s*/)
-        .map(QD_Clean)
-        .filter(Boolean);
-
-  const title = fields.quest_title || fields.title || "";
-  const objective = fields.quest_objective || fields.objective || "";
-
-  const quest = title || objective
-    ? {
-        kind: fields.quest_kind || fields.kind || "side",
-        type: fields.quest_type || fields.type || "story",
-        title,
-        objective,
-        score: QD_Number(fields.quest_score || fields.score, 50),
-        reason: fields.quest_reason || fields.reason || ""
-      }
-    : null;
-
-  const language = QD_Lower(fields.language);
-
-  return {
-    found: true,
-    cleanText,
-    data: {
-      language: ["es", "en"].includes(language) ? language : undefined,
-      complete,
-      quest
-    }
-  };
 }
 
 
 /* ============================================================
    QUEST VALIDATION
    ============================================================ */
+
 function QD_ValidQuestCandidate(candidate) {
-  if (!candidate || typeof candidate !== "object") {
+  if (
+    !candidate ||
+    typeof candidate !== "object"
+  ) {
     return false;
   }
 
-  candidate.title = QD_Clean(candidate.title);
-  candidate.objective = QD_Clean(candidate.objective);
+  candidate.title =
+    QD_Clean(candidate.title);
 
-  // Solo estos dos campos son imprescindibles.
-  if (candidate.title.length < 2 || candidate.objective.length < 4) {
+  candidate.objective =
+    QD_Clean(candidate.objective);
+
+  if (
+    candidate.title.length < 2 ||
+    candidate.objective.length < 4
+  ) {
     return false;
   }
 
-  let kind = QD_Lower(candidate.kind) || "side";
-  let type = QD_Lower(candidate.type) || "story";
+  let kind =
+    QD_Lower(candidate.kind) || "side";
 
-  if (!["main", "side"].includes(kind)) {
+  let type =
+    QD_Lower(candidate.type) || "story";
+
+  if (
+    !["main", "side"].includes(kind)
+  ) {
     kind = "side";
   }
 
-  if (!QD_VALID_TYPES.includes(type)) {
+  if (
+    !QD_VALID_TYPES.includes(type)
+  ) {
     type = "story";
   }
 
-  if (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) {
+  if (
+    kind === "main" &&
+    !ALLOW_MAIN_STORY_QUESTS
+  ) {
     kind = "side";
   }
 
-  if (kind === "side" && !ALLOW_SIDE_QUESTS) {
+  if (
+    kind === "side" &&
+    !ALLOW_SIDE_QUESTS
+  ) {
     kind = "main";
   }
 
@@ -1852,8 +1808,7 @@ function QD_ApplyResult(
 ) {
   if (
     !data ||
-    typeof data !==
-      "object"
+    typeof data !== "object"
   ) {
     return false;
   }
@@ -1861,10 +1816,8 @@ function QD_ApplyResult(
   let changed = false;
 
   if (
-    data.language ===
-      "es" ||
-    data.language ===
-      "en"
+    data.language === "es" ||
+    data.language === "en"
   ) {
     s.displayLanguage =
       data.language;
@@ -1875,9 +1828,7 @@ function QD_ApplyResult(
      ---------------------------------------------------------- */
 
   if (
-    Array.isArray(
-      data.complete
-    )
+    Array.isArray(data.complete)
   ) {
     const completions =
       data.complete;
@@ -1888,16 +1839,14 @@ function QD_ApplyResult(
       const quest
       of s.activeQuests
     ) {
-      let completion =
-        null;
+      let completion = null;
 
       for (
         const item
         of completions
       ) {
         const id =
-          typeof item ===
-            "string"
+          typeof item === "string"
             ? QD_Clean(item)
             : QD_Clean(
                 item &&
@@ -1907,37 +1856,28 @@ function QD_ApplyResult(
         if (
           id &&
           id ===
-            QD_Clean(
-              quest.id
-            )
+            QD_Clean(quest.id)
         ) {
-          completion =
-            item;
+          completion = item;
           break;
         }
       }
 
       if (!completion) {
-        remaining.push(
-          quest
-        );
+        remaining.push(quest);
         continue;
       }
 
       const reason =
-        typeof completion ===
-          "object"
-          ? QD_Clean(
-              completion.reason
-            )
+        typeof completion === "object"
+          ? QD_Clean(completion.reason)
           : "";
 
       QD_RecordCompletion(
         s,
         quest,
         turn,
-        reason ||
-          "Objective completed."
+        reason || "Objective completed."
       );
 
       changed = true;
@@ -1953,15 +1893,12 @@ function QD_ApplyResult(
 
   if (
     s.pendingEvaluation &&
-    s.pendingEvaluation
-      .allowNewQuest === true &&
-    QD_ValidQuestCandidate(
-      data.quest
-   !QD_IsDuplicateQuest(
-    s,
-    data.quest.title,
-    data.quest.objective
-)
+    s.pendingEvaluation.allowNewQuest === true &&
+    QD_ValidQuestCandidate(data.quest) &&
+    !QD_IsDuplicateQuest(
+      s,
+      data.quest.title,
+      data.quest.objective
     )
   ) {
     const candidate =
@@ -1969,29 +1906,21 @@ function QD_ApplyResult(
 
     const title =
       QD_Limit(
-        QD_Clean(
-          candidate.title
-        ),
+        QD_Clean(candidate.title),
         140
       );
 
     const objective =
       QD_Limit(
-        QD_Clean(
-          candidate.objective
-        ),
+        QD_Clean(candidate.objective),
         320
       );
 
     const kind =
-      QD_Lower(
-        candidate.kind
-      );
+      QD_Lower(candidate.kind);
 
     const type =
-      QD_Lower(
-        candidate.type
-      );
+      QD_Lower(candidate.type);
 
     const score =
       Math.round(
@@ -2002,63 +1931,55 @@ function QD_ApplyResult(
         )
       );
 
+    if (
+      s.activeQuests.length <
+      MAX_ACTIVE_QUESTS
+    ) {
+      const quest = {
+        id:
+          QD_NewQuestId(
+            s,
+            turn
+          ),
 
-      if (
-        s.activeQuests.length <
-        MAX_ACTIVE_QUESTS
-      ) {
-        const quest = {
-          id:
-            QD_NewQuestId(
-              s,
-              turn
-            ),
+        title,
 
-          title,
+        objective,
 
-          objective,
+        kind,
 
-          kind,
+        type,
 
-          type,
+        score,
 
-          score,
+        reason:
+          QD_Limit(
+            QD_Clean(candidate.reason),
+            220
+          ),
 
-          reason:
-            QD_Limit(
-              QD_Clean(
-                candidate.reason
-              ),
-              220
-            ),
+        createdTurn:
+          turn,
 
-          createdTurn:
-            turn,
+        expiresTurn:
+          QUEST_EXPIRATION_TURNS > 0
+            ? turn + QUEST_EXPIRATION_TURNS
+            : null,
+      };
 
-          expiresTurn:
-            QUEST_EXPIRATION_TURNS >
-            0
-              ? turn +
-                QUEST_EXPIRATION_TURNS
-              : null,
-        };
+      s.activeQuests.push(quest);
 
-        s.activeQuests.push(
-          quest
-        );
+      s.lastQuestTurn =
+        turn;
 
-        s.lastQuestTurn =
-          turn;
+      changed = true;
 
-        changed = true;
-
-        QD_Log(
-          "Created quest",
-          quest
-        );
-      }
+      QD_Log(
+        "Created quest",
+        quest
+      );
     }
-  
+  }
 
   return changed;
 }
@@ -2070,17 +1991,14 @@ function QD_ApplyResult(
 
 function QD_FindDisplayCard() {
   if (
-    !Array.isArray(
-      storyCards
-    )
+    !Array.isArray(storyCards)
   ) {
     return null;
   }
 
   for (
     let index = 0;
-    index <
-      storyCards.length;
+    index < storyCards.length;
     index++
   ) {
     if (
@@ -2089,8 +2007,7 @@ function QD_FindDisplayCard() {
       )
     ) {
       return {
-        card:
-          storyCards[index],
+        card: storyCards[index],
         index
       };
     }
@@ -2108,8 +2025,7 @@ function QD_BuildDisplayText(s) {
   }
 
   const spanish =
-    s.displayLanguage ===
-    "es";
+    s.displayLanguage === "es";
 
   const lines = [];
 
@@ -2126,8 +2042,7 @@ function QD_BuildDisplayText(s) {
     of s.activeQuests
   ) {
     const label =
-      quest.kind ===
-      "main"
+      quest.kind === "main"
         ? (
             spanish
               ? "Principal"
@@ -2169,9 +2084,7 @@ function QD_BuildDisplayText(s) {
 }
 
 
-function QD_UpdateDisplayCard(
-  s
-) {
+function QD_UpdateDisplayCard(s) {
   const existing =
     QD_FindDisplayCard();
 
@@ -2191,13 +2104,10 @@ function QD_UpdateDisplayCard(
   }
 
   const entry =
-    QD_BuildDisplayText(
-      s
-    );
+    QD_BuildDisplayText(s);
 
   const title =
-    s.displayLanguage ===
-    "es"
+    s.displayLanguage === "es"
       ? "📜 Misiones activas"
       : "📜 Active Quests";
 
@@ -2211,13 +2121,9 @@ function QD_UpdateDisplayCard(
       );
 
       if (
-        storyCards[
-          existing.index
-        ]
+        storyCards[existing.index]
       ) {
-        storyCards[
-          existing.index
-        ].title =
+        storyCards[existing.index].title =
           title;
       }
 
@@ -2233,16 +2139,10 @@ function QD_UpdateDisplayCard(
 
     if (
       newIndex !== false &&
-      Number.isInteger(
-        Number(newIndex)
-      ) &&
-      storyCards[
-        Number(newIndex)
-      ]
+      Number.isInteger(Number(newIndex)) &&
+      storyCards[Number(newIndex)]
     ) {
-      storyCards[
-        Number(newIndex)
-      ].title =
+      storyCards[Number(newIndex)].title =
         title;
     }
   } catch (error) {
@@ -2259,105 +2159,95 @@ function QD_UpdateDisplayCard(
    ============================================================ */
 
 const QuestDirector = {
-
-  version:
-    QD_VERSION,
-
+  version: QD_VERSION,
 
   /* ----------------------------------------------------------
      INPUT HOOK
      ---------------------------------------------------------- */
 
- input(text) {
-  const s =
-    QD_GetState();
+  input(text) {
+    const s =
+      QD_GetState();
 
-  if (
-    !s ||
-    !QUEST_DIRECTOR_ENABLED
-  ) {
-    return text;
-  }
+    if (
+      !s ||
+      !QUEST_DIRECTOR_ENABLED
+    ) {
+      return text;
+    }
 
-  const turn =
-    QD_Turn();
+    const turn =
+      QD_Turn();
 
-  const expired =
-    QD_ExpireOldQuests(
-      s,
-      turn
-    );
+    const expired =
+      QD_ExpireOldQuests(
+        s,
+        turn
+      );
 
-  /*
-  A quest-generation request is one-shot.
-  It exists only when the activation roll succeeds.
-  */
+    /*
+    A quest-generation request is one-shot.
+    It exists only when the activation roll succeeds.
+    */
 
-  s.pendingEvaluation =
-    null;
+    s.pendingEvaluation =
+      null;
 
-  const cooldownFinished =
-    turn -
-      s.lastQuestTurn >=
-    MIN_TURNS_BETWEEN_QUESTS;
+    const cooldownFinished =
+      turn -
+        s.lastQuestTurn >=
+      MIN_TURNS_BETWEEN_QUESTS;
 
-  let allowNewQuest =
-    false;
+    let allowNewQuest = false;
 
-  if (
-    cooldownFinished &&
-    s.activeQuests.length <
-      MAX_ACTIVE_QUESTS &&
-    Math.random() <
-      QD_Clamp(
-        QUEST_ACTIVATION_CHANCE,
-        0,
-        1
+    if (
+      cooldownFinished &&
+      s.activeQuests.length <
+        MAX_ACTIVE_QUESTS &&
+      Math.random() <
+        QD_Clamp(
+          QUEST_ACTIVATION_CHANCE,
+          0,
+          1
+        )
+    ) {
+      allowNewQuest = true;
+    }
+
+    /*
+    IMPORTANT:
+    Active quests and expired quests must NOT trigger
+    a model-context injection by themselves.
+
+    Only a successful activation roll may request
+    a Quest Director generation pass.
+    */
+
+    if (allowNewQuest) {
+      s.pendingEvaluation = {
+        turn,
+        allowNewQuest: true
+      };
+    }
+
+    /*
+    Display maintenance is local script work.
+    It does not request an AI generation.
+    */
+
+    if (
+      !SHOW_QUEST_DISPLAY ||
+      expired ||
+      (
+        s.activeQuests.length > 0 &&
+        !QD_FindDisplayCard()
       )
-  ) {
-    allowNewQuest =
-      true;
-  }
+    ) {
+      QD_UpdateDisplayCard(s);
+    }
 
-  /*
-  IMPORTANT:
-  Active quests and expired quests must NOT trigger
-  a model-context injection by themselves.
-
-  Only a successful activation roll may request
-  a Quest Director generation pass.
-  */
-
-  if (
-    allowNewQuest
-  ) {
-    s.pendingEvaluation = {
-      turn,
-      allowNewQuest: true
-    };
-  }
-
-  /*
-  Display maintenance is local script work.
-  It does not request an AI generation.
-  */
-
-  if (
-    !SHOW_QUEST_DISPLAY ||
-    expired ||
-    (
-      s.activeQuests.length >
-        0 &&
-      !QD_FindDisplayCard()
-    )
-  ) {
-    QD_UpdateDisplayCard(
-      s
-    );
-  }
-
-  return text;
-},
+    return text;
+  },
 
 
   /* ----------------------------------------------------------
@@ -2380,17 +2270,10 @@ const QuestDirector = {
     }
 
     const maxChars =
-      typeof info !==
-        "undefined" &&
+      typeof info !== "undefined" &&
       info &&
-      Number.isFinite(
-        Number(
-          info.maxChars
-        )
-      )
-        ? Number(
-            info.maxChars
-          )
+      Number.isFinite(Number(info.maxChars))
+        ? Number(info.maxChars)
         : 32000;
 
     let worldIndex =
@@ -2410,9 +2293,7 @@ const QuestDirector = {
       Math.max(
         1800,
         maxChars -
-          QD_String(
-            text
-          ).length -
+          QD_String(text).length -
           250
       );
 
@@ -2424,37 +2305,31 @@ const QuestDirector = {
     for (
       let pass = 0;
       pass < 5 &&
-      prompt.length >
-        budget;
+      prompt.length > budget;
       pass++
     ) {
       if (
-        worldIndex.length >
-        1200
+        worldIndex.length > 1200
       ) {
         worldIndex =
           QD_Limit(
             worldIndex,
             Math.floor(
-              worldIndex.length *
-              0.62
+              worldIndex.length * 0.62
             )
           );
       } else if (
-        integrations.length >
-        700
+        integrations.length > 700
       ) {
         integrations =
           QD_Limit(
             integrations,
             Math.floor(
-              integrations.length *
-              0.55
+              integrations.length * 0.55
             )
           );
       } else {
-        integrations =
-          "";
+        integrations = "";
 
         prompt =
           QD_BuildPrompt(
@@ -2480,11 +2355,9 @@ const QuestDirector = {
     */
 
     if (
-      prompt.length >
-      budget
+      prompt.length > budget
     ) {
-      s.pendingEvaluation =
-        null;
+      s.pendingEvaluation = null;
 
       return {
         text,
@@ -2515,54 +2388,37 @@ const QuestDirector = {
       !s ||
       !QUEST_DIRECTOR_ENABLED
     ) {
-      return (
-        text ||
-        "\u200B"
-      );
-    }
-
-    const parsed =
-      QD_ExtractResult(
-        text;
-    const turn = QD_Turn();
-    const expired = QD_ExpireOldQuests(s, turn);
-    const hadPending = !!s.pendingEvaluation;
-      );
-
-    /*
-    Normal turns without a Quest Director request pass straight through.
-    */
-
-    if (
-      !parsed.found
-    ) {
-
-    if (!parsed.found) {
-     QD_Log("Output without result envelope", { hadPending });
-
-    s.pendingEvaluation = null;
-
-  if (
-    !SHOW_QUEST_DISPLAY ||
-    expired ||
-    (s.activeQuests.length > 0 && !QD_FindDisplayCard())
-  ) {
-    QD_UpdateDisplayCard(s);
-  }
-
-  return text || "\u200B";
-}
-      s.pendingEvaluation =
-        null;
-
-      return (
-        text ||
-        "\u200B"
-      );
+      return text || "\u200B";
     }
 
     const turn =
       QD_Turn();
+
+    const expired =
+      QD_ExpireOldQuests(
+        s,
+        turn
+      );
+
+    const parsed =
+      QD_ExtractResult(text);
+
+    if (!parsed.found) {
+      s.pendingEvaluation = null;
+
+      if (
+        !SHOW_QUEST_DISPLAY ||
+        expired ||
+        (
+          s.activeQuests.length > 0 &&
+          !QD_FindDisplayCard()
+        )
+      ) {
+        QD_UpdateDisplayCard(s);
+      }
+
+      return text || "\u200B";
+    }
 
     try {
       QD_ApplyResult(
@@ -2571,9 +2427,7 @@ const QuestDirector = {
         turn
       );
 
-      QD_UpdateDisplayCard(
-        s
-      );
+      QD_UpdateDisplayCard(s);
     } catch (error) {
       /*
       Quest Director must never break the story.
@@ -2585,18 +2439,12 @@ const QuestDirector = {
       );
     }
 
-    s.pendingEvaluation =
-      null;
+    s.pendingEvaluation = null;
 
     const clean =
-      QD_Clean(
-        parsed.cleanText
-      );
+      QD_Clean(parsed.cleanText);
 
-    return (
-      clean ||
-      "\u200B"
-    );
+    return clean || "\u200B";
   },
 
 
@@ -2612,9 +2460,7 @@ const QuestDirector = {
       return;
     }
 
-    QD_UpdateDisplayCard(
-      s
-    );
+    QD_UpdateDisplayCard(s);
   },
 
 
