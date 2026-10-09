@@ -1,0 +1,14 @@
+// Quest Director v1.0.0 Beta
+// Hook: INPUT
+// Creator: Nynaleath
+
+const modifier = (text) => {
+
+// YOUR OTHER SCRIPTS' INPUT HOOKS GO ABOVE THIS
+
+  text = QuestDirector.input(text);
+
+  return { text };
+};
+
+modifier(text);
