@@ -1,5 +1,5 @@
 // HOOK: LIBRARY
-// QUEST DIRECTOR v1.0.0 BETA 3
+// QUEST DIRECTOR v1.0.0 BETA 4
 // LICENSE: MIT
 // Creator: Nynaleath
 //
@@ -138,9 +138,6 @@ const QD_STATE_KEY = "questDirector";
 
 const QD_DISPLAY_KEY = "%QUEST_DIRECTOR_DISPLAY%";
 const QD_DISPLAY_TYPE = "Quest Director";
-
-const QD_RESULT_START = "<<<QD_RESULT>>>";
-const QD_RESULT_END = "<<<END_QD_RESULT>>>";
 
 const QD_VALID_TYPES = [
   "discovery",
@@ -1584,90 +1581,97 @@ function QD_BuildPrompt(
 
     "OPTIONAL SYSTEM SIGNALS:\n" +
     (integrationIndex || "NONE") +
+
+function QD_BuildPrompt(s, worldIndex, integrationIndex) {
+  const pending = s.pendingEvaluation || {};
+
+  const allowNewQuest = pending.allowNewQuest === true;
+
+  if (!allowNewQuest) {
+    return "";
+  }
+
+  const languageInstruction = QD_BuildLanguageInstruction();
+
+  return (
     "\n\n" +
-
-    "COMPLETION RULE:\n" +
-    "Mark an active quest complete ONLY when the current story output clearly accomplishes that objective.\n" +
-    "Do not complete quests merely because the player discussed them, planned them, considered them, or moved toward them.\n" +
-    "Only use active quest IDs that were supplied above.\n\n" +
-
-    "NEW QUEST RULE:\n" +
-    "Quest activation has already been decided by the script.\n" +
-    "Do not decide whether a quest should be created.\n" +
-    (allowNewQuest
-      ? "This turn is authorized for exactly ONE new quest generation. Generate ONE quest now.\n\n"
-      : "This turn is NOT authorized to generate a new quest. Set \"quest\" to null and only evaluate completion of existing active quests.\n\n"
-    ) +
-    "Generate standalone quests, without mechanically linking them to completed quests. Continue basing every quest on established lore, characters, locations, current events, and story continuity.\n\n" +
-
-    "EVENT PARADOX RULE:\n" +
-    "Never fire, complete, rewrite, satisfy, or alter a deterministic Event Paradox event.\n" +
-    "Treat Event Paradox information as existing world state only.\n\n" +
-
-    "KARMA RULE:\n" +
-    "Use Karma/Reputation only as a narrative signal. Never assume secret actions are publicly known unless the supplied information supports that.\n\n" +
-
-    "INNER SELF RULE:\n" +
-    "Use NPC brain information only as a character-state signal. Never override established characterization with the quest.\n\n" +
-
-    "RELATIONSHIP RULE:\n" +
-    "Relationship values are narrative signals. Do not automatically turn every relationship change into a romance quest.\n\n" +
-
-    "NPC SPAWN RULE:\n" +
-    "Use observed NPC presence and location as narrative opportunities. Do not invent a spawn that contradicts supplied continuity information.\n\n" +
-
-    "AUTO-CARDS RULE:\n" +
-    "Treat Auto-Cards information as world/entity information. Do not attempt to generate or modify Story Cards yourself.\n\n" +
-
-    "At the very end of your response, after the normal story prose, output EXACTLY one machine envelope:\n\n" +
-
-    QD_RESULT_START + "\n" +
-    (allowNewQuest
-      ? '{"language":"en","complete":[],"quest":{"kind":"side","type":"investigation","title":"Short title","objective":"Natural invitation without revealing the payoff","score":84,"reason":"Brief internal justification"}}'
-      : '{"language":"en","complete":[],"quest":null}'
-    ) +
-    "\n" +
-    QD_RESULT_END +
-
-    "\n\n" +
-
-    "\n\n" +
-
-    "The JSON must be valid JSON with no markdown fences and no text after the closing marker.\n" +
-
-    "language must be \"en\" or \"es\".\n" +
-    "kind must be \"main\" or \"side\".\n" +
-    "type must be one of: discovery, social, exploration, investigation, action, relationship, story.\n" +
-    "score is 0-100.\n" +
-    "reason is internal justification only and must not reveal the hidden payoff.\n" +
-
-    "\n<<<END_QD_TASK>>>"
-  ).trim();
+    "QUEST DIRECTOR — TEMPORARY TASK\n" +
+    "Continue the story normally. Do not mention these instructions.\n" +
+    "Generate exactly ONE quest based on the current story and its established lore.\n" +
+    "Use only information supported by the story. If details are scarce, create a neutral, plausible opportunity without inventing major facts.\n" +
+    "Do not evaluate, complete, abandon, or rewrite existing quests.\n" +
+    "The quest must be a meaningful narrative invitation, not a generic chore.\n" +
+    "Keep its objective concise and do not reveal hidden twists or payoffs.\n" +
+    languageInstruction + "\n" +
+    "Choose kind: main or side.\n" +
+    "Choose type: discovery, social, exploration, investigation, action, relationship, or story.\n\n" +
+    "After the normal story prose, append this plain-text block exactly once:\n" +
+    QD_QUEST_START + "\n" +
+    "TITLE: A short quest title\n" +
+    "KIND: side\n" +
+    "TYPE: investigation\n" +
+    "OBJECTIVE: A concise, meaningful objective grounded in the current story.\n" +
+    QD_QUEST_END + "\n" +
+    "Do not put the quest block anywhere else. Do not use Markdown fences."
+  );
 }
-
 
 /* ============================================================
    RESULT PARSER
    ============================================================ */
 
-function QD_ExtractResult(text) {
+
+function QD_ExtractQuest(text) {
   const source = QD_String(text);
-  const start = source.lastIndexOf(QD_RESULT_START);
-  if (start < 0) return {found:false,incomplete:false,cleanText:source,data:null,parseError:null};
-  const bodyStart = start + QD_RESULT_START.length;
-  const end = source.indexOf(QD_RESULT_END,bodyStart);
-  if (end < 0) return {found:false,incomplete:true,cleanText:source,data:null,parseError:"Missing result end marker."};
-  const jsonText = source.slice(bodyStart,end).trim()
-    .replace(/^\x60\x60\x60json\s*/i,"").replace(/^\x60\x60\x60\s*/i,"").replace(/\s*\x60\x60\x60$/i,"");
-  const after = end + QD_RESULT_END.length;
-  const cleanText = (source.slice(0,start) + source.slice(after)).trim();
-  try {
-    const data = JSON.parse(jsonText);
-    if (!data || typeof data !== "object" || Array.isArray(data)) return {found:true,incomplete:false,cleanText,data:null,parseError:"Result JSON must be an object."};
-    return {found:true,incomplete:false,cleanText,data,parseError:null};
-  } catch (error) {
-    return {found:true,incomplete:false,cleanText,data:null,parseError:QD_String(error && error.message ? error.message : error)};
+  const start = source.lastIndexOf(QD_QUEST_START);
+
+  if (start < 0) {
+    return {
+      found: false,
+      cleanText: source,
+      quest: null
+    };
   }
+
+  const bodyStart = start + QD_QUEST_START.length;
+  const end = source.indexOf(QD_QUEST_END, bodyStart);
+
+  if (end < 0) {
+    return {
+      found: false,
+      cleanText: source,
+      quest: null
+    };
+  }
+
+  const block = source.slice(bodyStart, end);
+
+  function readField(name) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = block.match(
+      new RegExp("(?:^|\\n)\\s*" + escapedName + "\\s*:\\s*(.*)", "i")
+    );
+
+    return match ? QD_Clean(match[1]) : "";
+  }
+
+  const quest = {
+    title: readField("TITLE"),
+    kind: readField("KIND"),
+    type: readField("TYPE"),
+    objective: readField("OBJECTIVE")
+  };
+
+  const cleanText = (
+    source.slice(0, start) +
+    source.slice(end + QD_QUEST_END.length)
+  ).trim();
+
+  return {
+    found: true,
+    cleanText,
+    quest
+  };
 }
 
 
@@ -1746,178 +1750,84 @@ function QD_ValidQuestCandidate(candidate) {
    APPLY MODEL RESULT
    ============================================================ */
 
-function QD_ApplyResult(s,data,turn) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) { QD_Log("Result rejected: data is not a valid object.",data); return false; }
-  let changed = false;
-  QD_Log("Applying model result.",{
-    turn,activeBefore:s.activeQuests.length,
-    completionCandidates:Array.isArray(data.complete)?data.complete.length:0,
-    newQuestAuthorized:!!(s.pendingEvaluation&&s.pendingEvaluation.allowNewQuest===true),
-    questCandidatePresent:!!data.quest
-  });
+function QD_ApplyResult(s, candidate, turn) {
+  if (!s || !candidate || typeof candidate !== "object") {
+    return false;
+  }
+
 
   if (
-    data.language === "es" ||
-    data.language === "en"
+    !s.pendingEvaluation ||
+    s.pendingEvaluation.allowNewQuest !== true
   ) {
-    s.displayLanguage =
-      data.language;
+    return false;
   }
 
-  /* ----------------------------------------------------------
-     1. COMPLETE QUESTS FIRST
-     ---------------------------------------------------------- */
+ 
+  if (s.activeQuests.length >= MAX_ACTIVE_QUESTS) {
+    QD_Log("Quest not created: active quest limit reached.");
+    return false;
+  }
+
+  candidate.title = QD_Limit(QD_Clean(candidate.title), 140);
+  candidate.objective = QD_Limit(QD_Clean(candidate.objective), 320);
+
+  let kind = QD_Lower(candidate.kind);
+  let type = QD_Lower(candidate.type);
+
+  if (!["main", "side"].includes(kind)) {
+    kind = "side";
+  }
+
+  if (!QD_VALID_TYPES.includes(type)) {
+    type = "story";
+  }
+
+  if (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) {
+    kind = "side";
+  }
+
+  if (kind === "side" && !ALLOW_SIDE_QUESTS) {
+    kind = "main";
+  }
 
   if (
-    Array.isArray(data.complete)
+    (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) ||
+    (kind === "side" && !ALLOW_SIDE_QUESTS)
   ) {
-    const completions =
-      data.complete;
-
-    const remaining = [];
-
-    for (
-      const quest
-      of s.activeQuests
-    ) {
-      let completion = null;
-
-      for (
-        const item
-        of completions
-      ) {
-        const id =
-          typeof item === "string"
-            ? QD_Clean(item)
-            : QD_Clean(
-                item &&
-                item.id
-              );
-
-        if (
-          id &&
-          id ===
-            QD_Clean(quest.id)
-        ) {
-          completion = item;
-          break;
-        }
-      }
-
-      if (!completion) {
-        remaining.push(quest);
-        continue;
-      }
-
-      const reason =
-        typeof completion === "object"
-          ? QD_Clean(completion.reason)
-          : "";
-
-      QD_RecordCompletion(s,quest,turn,reason || "Objective completed.");
-      QD_Log("Quest completed.",{id:quest.id,title:quest.title,reason:reason || "Objective completed."});
-      changed = true;
-    }
-
-    s.activeQuests =
-      remaining;
+    QD_Log("Quest not created: both quest kinds are disabled.");
+    return false;
   }
 
-  /* ----------------------------------------------------------
-     2. CREATE ONE NEW QUEST
-     ---------------------------------------------------------- */
-
-  if (data.quest && s.pendingEvaluation && s.pendingEvaluation.allowNewQuest === true &&
-    QD_ValidQuestCandidate(data.quest) &&
-    !QD_IsDuplicateQuest(s,data.quest.title,data.quest.objective)
-  ) {
-    const candidate =
-      data.quest;
-
-    const title =
-      QD_Limit(
-        QD_Clean(candidate.title),
-        140
-      );
-
-    const objective =
-      QD_Limit(
-        QD_Clean(candidate.objective),
-        320
-      );
-
-    const kind =
-      QD_Lower(candidate.kind);
-
-    const type =
-      QD_Lower(candidate.type);
-
-    const score =
-      Math.round(
-        QD_Clamp(
-          candidate.score,
-          0,
-          100
-        )
-      );
-
-    if (
-      s.activeQuests.length <
-      MAX_ACTIVE_QUESTS
-    ) {
-      const quest = {
-        id:
-          QD_NewQuestId(
-            s,
-            turn
-          ),
-
-        title,
-
-        objective,
-
-        kind,
-
-        type,
-
-        score,
-
-        reason:
-          QD_Limit(
-            QD_Clean(candidate.reason),
-            220
-          ),
-
-        createdTurn:
-          turn,
-
-        expiresTurn:
-          QUEST_EXPIRATION_TURNS > 0
-            ? turn + QUEST_EXPIRATION_TURNS
-            : null,
-      };
-
-      s.activeQuests.push(quest);
-
-      s.lastQuestTurn =
-        turn;
-
-      changed = true;
-
-      QD_Log("Created quest",quest);
-    } else {
-      QD_Log("Quest candidate rejected: active quest limit reached.",{active:s.activeQuests.length,max:MAX_ACTIVE_QUESTS});
-    }
-  } else if (data.quest) {
-    QD_Log("Quest candidate not created.",{
-      authorized:!!(s.pendingEvaluation&&s.pendingEvaluation.allowNewQuest===true),
-      valid:QD_ValidQuestCandidate(data.quest),
-      duplicate:QD_IsDuplicateQuest(s,data.quest.title,data.quest.objective)
-    });
+  if (candidate.title.length < 2) {
+    candidate.title = "Una oportunidad inesperada";
   }
 
-  QD_Log("Result applied.",{changed,activeAfter:s.activeQuests.length,completedTotal:s.completedQuests.length});
-  return changed;
+  if (candidate.objective.length < 4) {
+    candidate.objective =
+      "Presta atención a lo ocurrido recientemente y descubre qué oportunidad narrativa puede surgir de ello.";
+  }
+
+  const quest = {
+    id: QD_NewQuestId(s, turn),
+    title: candidate.title,
+    objective: candidate.objective,
+    kind,
+    type,
+    score: 50,
+    reason: "Generated from the current story.",
+    createdTurn: turn,
+    expiresTurn:
+      QUEST_EXPIRATION_TURNS > 0
+        ? turn + QUEST_EXPIRATION_TURNS
+        : null
+  };
+
+  s.activeQuests.push(quest);
+  s.lastQuestTurn = turn;
+
+  QD_Log("Created quest.", quest);
+  return true;
 }
 
 
@@ -2227,301 +2137,89 @@ const QuestDirector = {
      CONTEXT HOOK
      ---------------------------------------------------------- */
 
-  context(text) {
-    const s =
-      QD_GetState();
+ 
+context(text) {
+  const s = QD_GetState();
 
-    if (
-      !s ||
-      !QUEST_DIRECTOR_ENABLED
-    ) {
-      QD_Log(
-        "Context hook skipped: script disabled or state unavailable."
-      );
+  if (!s || !QUEST_DIRECTOR_ENABLED) {
+    return { text, stop: false };
+  }
 
-      return {
-        text,
-        stop: false
-      };
-    }
+  if (
+    !s.pendingEvaluation ||
+    s.pendingEvaluation.allowNewQuest !== true
+  ) {
+    return { text, stop: false };
+  }
 
-    if (!s.pendingEvaluation) {
-      QD_Log(
-        "Context hook skipped: no pending evaluation."
-      );
+  const prompt = QD_BuildPrompt(s, "", "");
 
-      return {
-        text,
-        stop: false
-      };
-    }
+  if (!prompt) {
+    return { text, stop: false };
+  }
 
-    QD_Log(
-      "Context evaluation started.",
-      {
-        turn:s.pendingEvaluation.turn,
-        allowNewQuest:s.pendingEvaluation.allowNewQuest === true,
-        activeQuests:s.activeQuests.length,
-        inputLength:QD_String(text).length
-      }
-    );
+  QD_Log("Temporary quest-generation instruction injected.", {
+    turn: s.pendingEvaluation.turn
+  });
 
-    const maxChars =
-      typeof info !== "undefined" &&
-      info &&
-      Number.isFinite(Number(info.maxChars))
-        ? Number(info.maxChars)
-        : 32000;
-
-    let worldIndex =
-      QD_BuildWorldIndex();
-
-    let integrations =
-      QD_BuildIntegrationIndex();
-
-    let prompt =
-      QD_BuildPrompt(
-        s,
-        worldIndex,
-        integrations
-      );
-
-    let budget =
-      Math.max(
-        0,
-        maxChars -
-          QD_String(text).length -
-          250
-      );
-
-    QD_Log(
-      "Context budget calculated.",
-      {
-        maxChars,
-        inputLength:QD_String(text).length,
-        budget,
-        initialPromptLength:prompt.length
-      }
-    );
-
-    /*
-    Reduce the large external sections first.
-    The task itself always has priority.
-    */
-
-    for (
-      let pass = 0;
-      pass < 5 &&
-      prompt.length > budget;
-      pass++
-    ) {
-      if (
-        worldIndex.length > 1200
-      ) {
-        worldIndex =
-          QD_Limit(
-            worldIndex,
-            Math.floor(
-              worldIndex.length * 0.62
-            )
-          );
-      } else if (
-        integrations.length > 700
-      ) {
-        integrations =
-          QD_Limit(
-            integrations,
-            Math.floor(
-              integrations.length * 0.55
-            )
-          );
-      } else {
-        integrations = "";
-
-        prompt =
-          QD_BuildPrompt(
-            s,
-            worldIndex,
-            integrations
-          );
-
-        break;
-      }
-
-      prompt =
-        QD_BuildPrompt(
-          s,
-          worldIndex,
-          integrations
-        );
-    }
-
-    /*
-    If there is still not enough room, skip the evaluation.
-    The story itself remains untouched.
-    */
-
-    if (
-      prompt.length > budget
-    ) {
-      QD_Log(
-        "Context evaluation skipped: prompt exceeds available budget after trimming.",
-        {
-          promptLength:prompt.length,
-          budget,
-          worldIndexLength:worldIndex.length,
-          integrationLength:integrations.length
-        }
-      );
-
-      s.pendingEvaluation = null;
-
-      return {
-        text,
-        stop: false
-      };
-    }
-
-    QD_Log(
-      "Context prompt injected.",
-      {
-        promptLength:prompt.length,
-        budget,
-        allowNewQuest:s.pendingEvaluation.allowNewQuest === true
-      }
-    );
-
-    return {
-      text:
-        QD_String(text) +
-        "\n\n" +
-        prompt,
-
-      stop: false
-    };
-  },
+  return {
+    text: QD_String(text) + "\n\n" + prompt,
+    stop: false
+  };
+},
 
 
   /* ----------------------------------------------------------
      OUTPUT HOOK
      ---------------------------------------------------------- */
 
-  output(text) {
-    const s =
-      QD_GetState();
+ 
+output(text) {
+  const s = QD_GetState();
 
+  if (!s || !QUEST_DIRECTOR_ENABLED) {
+    return text || "\u200B";
+  }
+
+  const turn = QD_Turn();
+
+  QD_ExpireOldQuests(s, turn);
+
+  const parsed = QD_ExtractQuest(text);
+
+  try {
     if (
-      !s ||
-      !QUEST_DIRECTOR_ENABLED
+      parsed.found &&
+      parsed.quest &&
+      s.pendingEvaluation &&
+      s.pendingEvaluation.allowNewQuest === true
     ) {
-      QD_Log(
-        "Output hook skipped: script disabled or state unavailable."
-      );
-
-      return text || "\u200B";
+      QD_ApplyResult(s, parsed.quest, turn);
+    } else if (
+      s.pendingEvaluation &&
+      s.pendingEvaluation.allowNewQuest === true
+    ) {
+      // Fallback local si el modelo no devuelve el bloque esperado.
+      QD_ApplyResult(s, {
+        title: "Una oportunidad inesperada",
+        kind: "side",
+        type: "story",
+        objective:
+          "Presta atención a las consecuencias de lo ocurrido recientemente y descubre qué oportunidad narrativa se abre."
+      }, turn);
     }
 
-    const turn =
-      QD_Turn();
+    QD_UpdateDisplayCard(s);
+  } catch (error) {
+    QD_Log("Output processing error.", error);
+  }
 
-    QD_Log(
-      "Output hook started.",
-      {
-        turn,
-        outputLength:QD_String(text).length,
-        pendingEvaluation:s.pendingEvaluation
-      }
-    );
+  s.pendingEvaluation = null;
 
-    const expired =
-      QD_ExpireOldQuests(
-        s,
-        turn
-      );
-
-    const parsed =
-      QD_ExtractResult(text);
-
-    QD_Log(
-      "Result envelope parsed.",
-      {
-        found:parsed.found,
-        incomplete:!!parsed.incomplete,
-        validObject:!!(
-          parsed.data &&
-          typeof parsed.data === "object" &&
-          !Array.isArray(parsed.data)
-        ),
-        parseError:parsed.parseError || null
-      }
-    );
-
-    if (!parsed.found) {
-      QD_Log(
-        parsed.incomplete
-          ? "Result envelope is incomplete; leaving story output untouched."
-          : "No result envelope found; leaving story output untouched."
-      );
-
-      s.pendingEvaluation = null;
-
-      if (
-        !SHOW_QUEST_DISPLAY ||
-        expired ||
-        (
-          s.activeQuests.length > 0 &&
-          !QD_FindDisplayCard()
-        )
-      ) {
-        QD_UpdateDisplayCard(s);
-      }
-
-      return text || "\u200B";
-    }
-
-    if (!parsed.data) {
-      QD_Log(
-        "Malformed result envelope; JSON could not be used.",
-        parsed.parseError || "Unknown parse error."
-      );
-    }
-
-    try {
-      QD_ApplyResult(
-        s,
-        parsed.data,
-        turn
-      );
-
-      QD_UpdateDisplayCard(s);
-    } catch (error) {
-      /*
-      Quest Director must never break the story.
-      */
-
-      QD_Log(
-        "Output processing error",
-        error
-      );
-    }
-
-    s.pendingEvaluation = null;
-
-    const clean =
-      QD_Clean(parsed.cleanText);
-
-    QD_Log(
-      "Output processing finished.",
-      {
-        turn,
-        cleanLength:clean.length,
-        activeQuests:s.activeQuests.length,
-        completedQuests:s.completedQuests.length
-      }
-    );
-
-    return clean || "\u200B";
-  },
+  return parsed.found
+    ? (parsed.cleanText || "\u200B")
+    : (text || "\u200B");
+},
 
 
   /* ----------------------------------------------------------
