@@ -2486,62 +2486,41 @@ const QuestDirector = {
      CONTEXT HOOK
      ---------------------------------------------------------- */
 
-  context(text) {
-    const s =
-      QD_GetState();
 
-    if (
-      !s ||
-      !QUEST_DIRECTOR_ENABLED
-    ) {
-      return {
-        text,
-        stop: false
-      };
-    }
+context(text) {
+  const s = QD_GetState();
 
-    if (
-      !s.pendingEvaluation ||
-      s.pendingEvaluation.allowNewQuest !== true
-    ) {
-      return {
-        text,
-        stop: false
-      };
-    }
+  if (!s || !QUEST_DIRECTOR_ENABLED) {
+    return QD_String(text);
+  }
 
-    const worldIndex =
-      QD_BuildWorldIndex();
+  if (
+    !s.pendingEvaluation ||
+    s.pendingEvaluation.allowNewQuest !== true
+  ) {
+    return QD_String(text);
+  }
 
-    const integrationIndex =
-      QD_BuildIntegrationIndex();
+  const worldIndex = QD_BuildWorldIndex();
+  const integrationIndex = QD_BuildIntegrationIndex();
 
-    const prompt =
-      QD_BuildPrompt(
-        s,
-        worldIndex,
-        integrationIndex
-      );
+  const prompt = QD_BuildPrompt(
+    s,
+    worldIndex,
+    integrationIndex
+  );
 
-    if (!prompt) {
-      return {
-        text,
-        stop: false
-      };
-    }
+  if (!prompt) {
+    return QD_String(text);
+  }
 
-    QD_Log(
-      "Temporary quest-generation instruction injected.",
-      {
-        turn: s.pendingEvaluation.turn
-      }
-    );
+  QD_Log("Quest generation prompt injected.", {
+    turn: s.pendingEvaluation.turn
+  });
 
-    return {
-      text: QD_String(text) + "\n\n" + prompt,
-      stop: false
-    };
-  },
+  return QD_String(text) + "\n\n" + prompt;
+},
+
 
 
   /* ----------------------------------------------------------
