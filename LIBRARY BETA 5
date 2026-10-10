@@ -2155,37 +2155,52 @@ if (!prompt) {
   /* ----------------------------------------------------------
      OUTPUT HOOK
      ---------------------------------------------------------- */
-try {
-  if (
-    s.pendingEvaluation &&
-    s.pendingEvaluation.allowNewQuest === true
-  ) {
-    if (!parsed.found) {
-      QD_Log("QUEST_BLOCK_MISSING", {
-        turn,
-        outputLength: QD_String(text).length
-      });
-    } else if (!parsed.quest) {
-      QD_Log("QUEST_BLOCK_INVALID", {
-        turn,
-        reason: "The quest block could not be parsed."
-      });
-    } else {
-      QD_ApplyResult(s, parsed.quest, turn);
+
+  output(text) {
+    const s = QD_GetState();
+
+    if (!s || !QUEST_DIRECTOR_ENABLED) {
+      return text || "\u200B";
     }
-  }
 
-  QD_UpdateDisplayCard(s);
-} catch (error) {
-  QD_Log("Output processing error.", error);
-}
+    const turn = QD_Turn();
 
-  s.pendingEvaluation = null;
+    QD_ExpireOldQuests(s, turn);
 
-  return parsed.found
-    ? (parsed.cleanText || "\u200B")
-    : (text || "\u200B");
-},
+    const parsed = QD_ExtractQuest(text);
+
+    try {
+      if (
+        s.pendingEvaluation &&
+        s.pendingEvaluation.allowNewQuest === true
+      ) {
+        if (!parsed.found) {
+          QD_Log("QUEST_BLOCK_MISSING", {
+            turn,
+            outputLength: QD_String(text).length
+          });
+        } else if (!parsed.quest) {
+          QD_Log("QUEST_BLOCK_INVALID", {
+            turn,
+            reason: "The quest block could not be parsed."
+          });
+        } else {
+          QD_ApplyResult(s, parsed.quest, turn);
+        }
+      }
+
+      QD_UpdateDisplayCard(s);
+    } catch (error) {
+      QD_Log("Output processing error.", error);
+    }
+
+    s.pendingEvaluation = null;
+
+    return parsed.found
+      ? (parsed.cleanText || "\u200B")
+      : (text || "\u200B");
+  },
+
 
 
   /* ----------------------------------------------------------
