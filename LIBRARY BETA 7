@@ -1,0 +1,2650 @@
+
+ // HOOK: LIBRARY
+// QUEST DIRECTOR v1.0.0 BETA 6
+// LICENSE: MIT
+// Creator: Nynaleath
+//
+// Universal narrative quest system for AI Dungeon.
+//
+// CORE DESIGN:
+// - Evaluates the current model context globally.
+// - Also indexes Story Cards that are NOT currently triggered.
+// - Optional integrations are strictly opt-in.
+// - Quest generation uses the SAME model call as the normal story.
+// - No second AI generation is used.
+// - Quest state is stored in state.questDirector.
+// - The visible quest layer is a managed Story Card and can be disabled.
+// - Quests are narrative invitations, not predefined rewards/payoffs.
+//
+// IMPORTANT:
+// The four script tabs must contain only ONE "modifier(text)" wrapper each.
+// When combining this with other scripts, keep one modifier and call
+// QuestDirector.input/context/output from that existing wrapper.
+
+/* ============================================================
+   CREATOR CONFIGURATION
+   ============================================================ */
+
+const QUEST_DIRECTOR_ENABLED = true;
+
+/*
+Chance of creating a new quest once the cooldown has ended.
+
+0.10 = rare
+0.20 = occasional / balanced
+0.30 = frequent
+*/
+const QUEST_ACTIVATION_CHANCE = 0.22;
+
+/*
+Minimum number of turns that must pass after a QUEST IS CREATED
+before the script can attempt to create another one.
+
+After the cooldown ends, the probability is checked every turn.
+*/
+const MIN_TURNS_BETWEEN_QUESTS = 6;
+
+/*
+Minimum number of turns between attempts to generate a new quest.
+Failed attempts do not create quests, but still observe this cooldown.
+*/
+const MIN_TURNS_BETWEEN_ATTEMPTS = 3;
+
+/*
+Maximum number of active quests at once.
+*/
+const MAX_ACTIVE_QUESTS = 3;
+
+/*
+How many completed quests are remembered for duplicate prevention.
+*/
+const MAX_COMPLETED_QUESTS = 24;
+
+/*
+How long a quest can remain active.
+
+0 = quests never expire.
+*/
+const QUEST_EXPIRATION_TURNS = 80;
+
+/*
+Allow the model to create main-story quests.
+*/
+const ALLOW_MAIN_STORY_QUESTS = true;
+
+/*
+Allow the model to create side quests.
+*/
+const ALLOW_SIDE_QUESTS = true;
+
+/*
+"auto" = match the dominant English/Spanish language of the story.
+You can force "en" or "es".
+*/
+const QUEST_LANGUAGE = "auto";
+
+/*
+Show the managed Active Quests Story Card.
+
+false = the quest system still works,
+but no quest display card is maintained.
+*/
+const SHOW_QUEST_DISPLAY = true;
+
+/*
+Useful while testing.
+*/
+const QUEST_DIRECTOR_DEBUG = false;
+
+/*
+Context limits.
+
+The global index scans every Story Card and distributes the
+available context budget across all cards.
+*/
+const WORLD_INDEX_MAX_CHARS = 7000;
+const INTEGRATION_MAX_CHARS = 4000;
+
+/*
+Keep the visible quest card comfortably small.
+*/
+const DISPLAY_MAX_CHARS = 900;
+
+
+/* ============================================================
+   OPTIONAL SCRIPT INTEGRATIONS
+   ============================================================ */
+
+/*
+Every integration is OFF by default.
+
+IMPORTANT:
+When false, the corresponding external script is not referenced.
+*/
+
+const INNER_SELF_INSTALLED = false;
+const AUTO_CARDS_INSTALLED = false;
+const BASIC_REL_INSTALLED = false;
+const NPC_SPAWN_SYSTEM_INSTALLED = false;
+const EVENT_PARADOX_INSTALLED = false;
+const KARMA_SYSTEM_INSTALLED = false;
+
+
+// ============================================================
+// YOUR OTHER SCRIPTS CODE GOES HERE
+// ============================================================
+
+
+/* ============================================================
+   INTERNAL CONSTANTS
+   ============================================================ */
+
+const QD_VERSION = "1.0.0";
+
+const QD_STATE_KEY = "questDirector";
+const QD_QUEST_START = "[[QD_QUEST_BEGIN]]";
+const QD_QUEST_END = "[[QD_QUEST_END]]";
+const QD_QUEST_NONE = "[[QD_QUEST_NONE]]";
+
+const QD_DISPLAY_KEY = "%QUEST_DIRECTOR_DISPLAY%";
+const QD_DISPLAY_TYPE = "A📜❗_ QUEST DIRECTOR_A";
+
+const QD_VALID_TYPES = [
+  "discovery",
+  "social",
+  "exploration",
+  "investigation",
+  "action",
+  "relationship",
+  "story"
+];
+
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+
+function QD_String(value) {
+  return String(value ?? "");
+}
+
+
+function QD_Clean(value) {
+  return QD_String(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+function QD_Lower(value) {
+  return QD_Clean(value).toLowerCase();
+}
+
+
+function QD_Normalize(value) {
+  return QD_Lower(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+function QD_Limit(value, max) {
+  const text = QD_String(value);
+
+  if (text.length <= max) {
+    return text;
+  }
+
+  return text
+    .slice(0, Math.max(0, max - 1))
+    .trimEnd() + "…";
+}
+
+
+function QD_Number(value, fallback = 0) {
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
+}
+
+
+function QD_Clamp(value, min, max) {
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      QD_Number(value, min)
+    )
+  );
+}
+
+
+function QD_Turn() {
+  const actionCount =
+    typeof info !== "undefined" &&
+    info
+      ? Number(info.actionCount)
+      : NaN;
+
+  if (Number.isFinite(actionCount)) {
+    return actionCount;
+  }
+
+  return Array.isArray(history)
+    ? history.length
+    : 0;
+}
+
+
+function QD_Log(...args) {
+  if (!QUEST_DIRECTOR_DEBUG) {
+    return;
+  }
+
+  try {
+    log(
+      "[Quest Director]",
+      ...args
+    );
+  } catch (_) {}
+}
+
+
+/* ============================================================
+   GLOBAL LORE KEYWORDS
+   ============================================================ */
+
+const QD_WORLD_STOP_WORDS = new Set(
+  (
+    "the and for with from that this into your you are " +
+    "was were have has had not but all any can may who " +
+    "what when where why how their them they then than " +
+    "los las unos unas del para por con sin entre desde " +
+    "como pero porque quien quienes cuando donde sobre " +
+    "esta este estos estas eso esa ese son sus hay era " +
+    "eran fue fueron una uno que se lo la el y de en a " +
+    "es o u al le les su ya no si mas muy todo"
+  ).split(/\s+/)
+);
+
+
+function QD_WorldTerms(value) {
+  const words = QD_Normalize(value).split(" ");
+  const seen = new Set();
+  const result = [];
+
+  for (const word of words) {
+    if (
+      word.length < 4 ||
+      QD_WORLD_STOP_WORDS.has(word) ||
+      seen.has(word)
+    ) {
+      continue;
+    }
+
+    seen.add(word);
+    result.push(word);
+  }
+
+  return result.join(", ");
+}
+
+
+function QD_WorldFit(value, max) {
+  if (max <= 0) {
+    return "";
+  }
+
+  return QD_Limit(value, max);
+}
+
+
+/* ============================================================
+   STATE
+   ============================================================ */
+
+function QD_CreateState() {
+  return {
+    version: QD_VERSION,
+
+    activeQuests: [],
+
+    completedQuests: [],
+
+    expiredQuests: [],
+
+    lastQuestTurn: -999999,
+
+    lastEvaluationTurn: -999999,
+
+    nextQuestNumber: 1,
+
+    displayLanguage: "en",
+
+    pendingEvaluation: null
+  };
+}
+
+
+function QD_GetState() {
+  if (
+    !state ||
+    typeof state !== "object"
+  ) {
+    return null;
+  }
+
+  if (
+    !state[QD_STATE_KEY] ||
+    typeof state[QD_STATE_KEY] !== "object"
+  ) {
+    state[QD_STATE_KEY] =
+      QD_CreateState();
+  }
+
+  const s =
+    state[QD_STATE_KEY];
+
+  if (!Array.isArray(s.activeQuests)) {
+    s.activeQuests = [];
+  }
+
+  if (!Array.isArray(s.completedQuests)) {
+    s.completedQuests = [];
+  }
+
+  if (!Array.isArray(s.expiredQuests)) {
+    s.expiredQuests = [];
+  }
+
+  if (
+    !Number.isFinite(
+      Number(s.lastQuestTurn)
+    )
+  ) {
+    s.lastQuestTurn = -999999;
+  }
+
+  if (
+    !Number.isFinite(
+      Number(s.lastEvaluationTurn)
+    )
+  ) {
+    s.lastEvaluationTurn = -999999;
+  }
+
+  if (
+    !Number.isFinite(
+      Number(s.nextQuestNumber)
+    )
+  ) {
+    s.nextQuestNumber = 1;
+  }
+
+  if (
+    s.displayLanguage !== "es" &&
+    s.displayLanguage !== "en"
+  ) {
+    s.displayLanguage = "en";
+  }
+
+  return s;
+}
+
+
+function QD_NewQuestId(s, turn) {
+  const number =
+    Math.max(
+      1,
+      Math.floor(
+        QD_Number(
+          s.nextQuestNumber,
+          1
+        )
+      )
+    );
+
+  s.nextQuestNumber =
+    number + 1;
+
+  return `QD-${turn}-${number}`;
+}
+
+
+/* ============================================================
+   QUEST MAINTENANCE
+   ============================================================ */
+
+function QD_ExpireOldQuests(
+  s,
+  turn
+) {
+  if (
+    QUEST_EXPIRATION_TURNS <= 0
+  ) {
+    return false;
+  }
+
+  let changed = false;
+
+  const remaining = [];
+
+  for (
+    const quest
+    of s.activeQuests
+  ) {
+    const createdTurn =
+      QD_Number(
+        quest.createdTurn,
+        turn
+      );
+
+    if (
+      turn - createdTurn >=
+      QUEST_EXPIRATION_TURNS
+    ) {
+      s.expiredQuests.push({
+        id: quest.id,
+        title: quest.title,
+        turn
+      });
+
+      changed = true;
+    } else {
+      remaining.push(
+        quest
+      );
+    }
+  }
+
+  s.activeQuests =
+    remaining;
+
+  s.expiredQuests =
+    s.expiredQuests.slice(
+      -MAX_COMPLETED_QUESTS
+    );
+
+  return changed;
+}
+
+
+function QD_RecordCompletion(
+  s,
+  quest,
+  turn,
+  reason
+) {
+  s.completedQuests.push({
+    id: quest.id,
+
+    title: quest.title,
+
+    objective: quest.objective,
+
+    kind: quest.kind,
+
+    completedTurn: turn,
+
+    reason:
+      QD_Limit(
+        reason ||
+          "Objective completed.",
+        220
+      )
+  });
+
+  s.completedQuests =
+    s.completedQuests.slice(
+      -MAX_COMPLETED_QUESTS
+    );
+}
+
+
+function QD_IsDuplicateQuest(
+  s,
+  title,
+  objective
+) {
+  const titleKey =
+    QD_Normalize(title);
+
+  const objectiveKey =
+    QD_Normalize(objective);
+
+  if (
+    !titleKey ||
+    !objectiveKey
+  ) {
+    return true;
+  }
+
+  for (
+    const quest
+    of s.activeQuests
+  ) {
+    const qTitle =
+      QD_Normalize(
+        quest.title
+      );
+
+    const qObjective =
+      QD_Normalize(
+        quest.objective
+      );
+
+    if (
+      qTitle === titleKey ||
+      qObjective === objectiveKey ||
+      (
+        qTitle &&
+        (
+          titleKey.includes(qTitle) ||
+          qTitle.includes(titleKey)
+        )
+      )
+    ) {
+      return true;
+    }
+  }
+
+  for (
+    const quest
+    of s.completedQuests
+  ) {
+    const qTitle =
+      QD_Normalize(
+        quest.title
+      );
+
+    const qObjective =
+      QD_Normalize(
+        quest.objective
+      );
+
+    if (
+      qTitle === titleKey ||
+      qObjective === objectiveKey
+    ) {
+      return true;
+    }
+  }
+
+  for (
+    const quest
+    of s.expiredQuests
+  ) {
+    const qTitle =
+      QD_Normalize(
+        quest.title
+      );
+
+    if (
+      qTitle === titleKey
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+/* ============================================================
+   STORY CARD WORLD INDEX
+   ============================================================ */
+
+function QD_IsOwnDisplayCard(
+  card
+) {
+  return !!(
+    card &&
+    QD_Clean(card.keys) ===
+      QD_DISPLAY_KEY
+  );
+}
+
+
+function QD_BuildWorldIndex() {
+  if (
+    !Array.isArray(
+      storyCards
+    )
+  ) {
+    return "";
+  }
+
+  const cards = [];
+
+  /*
+  Examine every Story Card before preparing the context index.
+  No card is excluded because it appears unrelated to the scene.
+  */
+
+  for (
+    let index = 0;
+    index < storyCards.length;
+    index++
+  ) {
+    const card =
+      storyCards[index];
+
+    if (
+      !card ||
+      QD_IsOwnDisplayCard(card)
+    ) {
+      continue;
+    }
+
+    const title =
+      QD_Clean(
+        card.title ||
+        card.name ||
+        (
+          QD_Clean(
+            card.keys
+          ).split(",")[0]
+          ||
+          `Card ${index + 1}`
+        )
+      );
+
+    const keys =
+      QD_Clean(card.keys);
+
+    const type =
+      QD_Clean(card.type);
+
+    const entry =
+      QD_Clean(
+        card.entry ||
+        card.description ||
+        card.notes ||
+        ""
+      );
+
+    const terms =
+      QD_WorldTerms(
+        [
+          title,
+          keys,
+          type,
+          entry
+        ].join(" ")
+      );
+
+    cards.push({
+      title,
+      keys,
+      type,
+      entry,
+      terms
+    });
+  }
+
+  if (!cards.length) {
+    return "";
+  }
+
+  const header =
+    `GLOBAL LORE INDEX — ${cards.length} cards scanned.\n` +
+    "Every following row represents a different Story Card.\n";
+
+  /*
+  Allocate the available index budget across all scanned cards.
+  Later cards are not dropped just because earlier cards are long.
+  */
+
+  const separatorsLength =
+    Math.max(
+      0,
+      cards.length - 1
+    );
+
+  const available =
+    Math.max(
+      0,
+      WORLD_INDEX_MAX_CHARS -
+        header.length -
+        separatorsLength
+    );
+
+  const baseBudget =
+    Math.floor(
+      available / cards.length
+    );
+
+  const extraCharacters =
+    available % cards.length;
+
+  const rows =
+    cards.map((card, index) => {
+      const rowBudget =
+        baseBudget +
+        (
+          index < extraCharacters
+            ? 1
+            : 0
+        );
+
+      const prefix =
+        `#${index + 1}`;
+
+      if (
+        rowBudget <= prefix.length
+      ) {
+        return QD_WorldFit(
+          prefix,
+          rowBudget
+        );
+      }
+
+      const labelOverhead =
+        prefix.length + 1 +
+        8 + 8 + 9 + 8;
+
+      const payload =
+        Math.max(
+          0,
+          rowBudget - labelOverhead
+        );
+
+      const titleBudget =
+        Math.floor(
+          payload * 0.22
+        );
+
+      const keysBudget =
+        Math.floor(
+          payload * 0.18
+        );
+
+      const typeBudget =
+        Math.floor(
+          payload * 0.08
+        );
+
+      const termsBudget =
+        Math.floor(
+          payload * 0.26
+        );
+
+      const entryBudget =
+        Math.max(
+          0,
+          payload -
+            titleBudget -
+            keysBudget -
+            typeBudget -
+            termsBudget
+        );
+
+      const title =
+        QD_WorldFit(
+          card.title,
+          titleBudget
+        );
+
+      const keys =
+        QD_WorldFit(
+          card.keys,
+          keysBudget
+        );
+
+      const type =
+        QD_WorldFit(
+          card.type,
+          typeBudget
+        );
+
+      const terms =
+        QD_WorldFit(
+          card.terms,
+          termsBudget
+        );
+
+      const entry =
+        QD_WorldFit(
+          card.entry,
+          entryBudget
+        );
+
+      const row =
+        `${prefix} ${title}` +
+        ` | keys:${keys}` +
+        ` | type:${type}` +
+        ` | terms:${terms}` +
+        ` | lore:${entry}`;
+
+      return QD_WorldFit(
+        row,
+        rowBudget
+      );
+    });
+
+  return QD_WorldFit(
+    header + rows.join("\n"),
+    WORLD_INDEX_MAX_CHARS
+  );
+}
+
+
+/* ============================================================
+   INTEGRATION: INNER SELF
+   ============================================================ */
+
+function QD_ReadInnerSelf() {
+  const rows = [];
+
+  /*
+  Only called when INNER_SELF_INSTALLED === true.
+  */
+
+  if (
+    state &&
+    state.InnerSelf &&
+    typeof state.InnerSelf === "object"
+  ) {
+    const inner =
+      state.InnerSelf;
+
+    if (
+      typeof inner.agent === "string" &&
+      inner.agent.trim()
+    ) {
+      rows.push(
+        `[IS] active agent: ` +
+        QD_Limit(
+          inner.agent,
+          100
+        )
+      );
+    }
+  }
+
+  if (
+    !Array.isArray(
+      storyCards
+    )
+  ) {
+    return rows.join("\n");
+  }
+
+  let brainCount = 0;
+
+  for (
+    const card
+    of storyCards
+  ) {
+    if (
+      brainCount >= 6
+    ) {
+      break;
+    }
+
+    if (
+      !card ||
+      QD_String(
+        card.type
+      ) !== "Brain"
+    ) {
+      continue;
+    }
+
+    let agent =
+      QD_Clean(
+        card.title
+      );
+
+    try {
+      const keys =
+        QD_Clean(
+          card.keys
+        );
+
+      if (
+        keys.startsWith("{")
+      ) {
+        const parsed =
+          JSON.parse(keys);
+
+        if (
+          parsed &&
+          typeof parsed.agent ===
+            "string"
+        ) {
+          agent =
+            QD_Clean(
+              parsed.agent
+            ) || agent;
+        }
+      }
+    } catch (_) {}
+
+    if (!agent) {
+      continue;
+    }
+
+    /*
+    Inner Self Brain cards use their card data to hold
+    the character's evolving internal information.
+    Keep only a tiny excerpt here.
+    */
+
+    const brainData =
+      card.description ||
+      card.notes ||
+      "";
+
+    rows.push(
+      `[IS] ${QD_Limit(agent, 80)}` +
+      (
+        brainData
+          ? ` | brain: ${QD_Limit(brainData, 240)}`
+          : ""
+      )
+    );
+
+    brainCount++;
+  }
+
+  return rows.join("\n");
+}
+
+
+/* ============================================================
+   INTEGRATION: AUTO-CARDS
+   ============================================================ */
+
+function QD_ReadAutoCards() {
+  /*
+  Only called when AUTO_CARDS_INSTALLED === true.
+  */
+
+  if (
+    typeof AutoCards !==
+      "function"
+  ) {
+    return "";
+  }
+
+  try {
+    const root =
+      AutoCards();
+
+    const api =
+      root &&
+      root.API;
+
+    if (
+      api &&
+      typeof api.getUsedTitles ===
+        "function"
+    ) {
+      const titles =
+        api.getUsedTitles();
+
+      if (
+        Array.isArray(
+          titles
+        )
+      ) {
+        const cleanTitles =
+          titles
+            .slice(0, 24)
+            .map(QD_Clean)
+            .filter(Boolean);
+
+        if (
+          cleanTitles.length
+        ) {
+          return (
+            "[AC] known card titles: " +
+            cleanTitles.join(
+              " | "
+            )
+          );
+        }
+      }
+    }
+  } catch (_) {}
+
+  return "";
+}
+
+
+/* ============================================================
+   INTEGRATION: BASIC REL
+   ============================================================ */
+
+function QD_ReadBasicREL() {
+  /*
+  Only called when BASIC_REL_INSTALLED === true.
+  */
+
+  const relationships =
+    state &&
+    state.relationships &&
+    typeof state.relationships ===
+      "object"
+      ? state.relationships
+      : null;
+
+  if (
+    !relationships ||
+    !relationships.characters ||
+    typeof relationships.characters !==
+      "object"
+  ) {
+    return "";
+  }
+
+  const activeNames =
+    relationships.sceneTracker &&
+    Array.isArray(
+      relationships
+        .sceneTracker
+        .activeNames
+    )
+      ? relationships
+          .sceneTracker
+          .activeNames
+      : [];
+
+  const characters =
+    Object.entries(
+      relationships.characters
+    )
+      .sort(
+        (a, b) => {
+          const aActive =
+            activeNames.includes(
+              a[0]
+            )
+              ? 1
+              : 0;
+
+          const bActive =
+            activeNames.includes(
+              b[0]
+            )
+              ? 1
+              : 0;
+
+          return (
+            bActive -
+            aActive
+          );
+        }
+      )
+      .slice(0, 8);
+
+  const rows = [];
+
+  for (
+    const [
+      name,
+      data
+    ]
+    of characters
+  ) {
+    if (
+      !data ||
+      typeof data !==
+        "object"
+    ) {
+      continue;
+    }
+
+    const friendship =
+      QD_Number(
+        data.friendship,
+        0
+      );
+
+    const romance =
+      QD_Number(
+        data.romance,
+        0
+      );
+
+    const active =
+      activeNames.includes(
+        name
+      )
+        ? " | active scene"
+        : "";
+
+    rows.push(
+      `[REL] ${QD_Limit(name, 70)}` +
+      ` | friendship: ${friendship}` +
+      ` | romance: ${romance}` +
+      active
+    );
+  }
+
+  return rows.join("\n");
+}
+
+
+/* ============================================================
+   INTEGRATION: NPC SPAWN SYSTEM
+   ============================================================ */
+
+function QD_ReadNPCSpawn() {
+  /*
+  Only called when NPC_SPAWN_SYSTEM_INSTALLED === true.
+  Quest Director observes NPC Spawn state.
+  It does NOT control spawning.
+  */
+
+  const npc =
+    state &&
+    state.npcSpawn &&
+    typeof state.npcSpawn ===
+      "object"
+      ? state.npcSpawn
+      : null;
+
+  if (!npc) {
+    return "";
+  }
+
+  const rows = [];
+
+  if (
+    npc.currentLocation
+  ) {
+    rows.push(
+      `[NPC] current location: ` +
+      QD_Limit(
+        npc.currentLocation,
+        120
+      )
+    );
+  }
+
+  if (
+    npc.lastEntry &&
+    typeof npc.lastEntry ===
+      "object"
+  ) {
+    rows.push(
+      `[NPC] last entry: ` +
+      QD_Limit(
+        npc.lastEntry.location,
+        100
+      ) +
+      ` | ${QD_Limit(
+        npc.lastEntry.type,
+        40
+      )}` +
+      ` | turn ${QD_Number(
+        npc.lastEntry.turn,
+        0
+      )}`
+    );
+  }
+
+  if (
+    npc.recentPresence &&
+    typeof npc.recentPresence ===
+      "object"
+  ) {
+    const names =
+      Object.keys(
+        npc.recentPresence
+      ).slice(0, 10);
+
+    if (names.length) {
+      rows.push(
+        "[NPC] recent presence: " +
+        names.join(" | ")
+      );
+    }
+  }
+
+  return rows.join("\n");
+}
+
+
+/* ============================================================
+   INTEGRATION: EVENT PARADOX
+   ============================================================ */
+
+function QD_SummarizeObject(
+  value,
+  depth = 0,
+  budget = 1400
+) {
+  if (
+    budget <= 0 ||
+    depth > 2 ||
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return QD_Limit(
+      QD_String(value),
+      Math.min(
+        240,
+        budget
+      )
+    );
+  }
+
+  if (
+    Array.isArray(value)
+  ) {
+    const parts = [];
+
+    let used = 0;
+
+    for (
+      const item
+      of value.slice(0, 12)
+    ) {
+      const part =
+        QD_SummarizeObject(
+          item,
+          depth + 1,
+          180
+        );
+
+      if (!part) {
+        continue;
+      }
+
+      if (
+        used +
+          part.length +
+          3 >
+        budget
+      ) {
+        break;
+      }
+
+      parts.push(part);
+
+      used +=
+        part.length + 3;
+    }
+
+    return parts.join(
+      " | "
+    );
+  }
+
+  if (
+    typeof value ===
+      "object"
+  ) {
+    const parts = [];
+
+    let used = 0;
+
+    for (
+      const [
+        key,
+        item
+      ]
+      of Object.entries(
+        value
+      ).slice(0, 18)
+    ) {
+      const lowerKey =
+        QD_Lower(key);
+
+      const relevant =
+        depth === 0 ||
+        /^(chapter|currentchapter|time|currenttime|variables|flags|entities|consequences|paths|memory|events|status|location|active|current)$/
+          .test(
+            lowerKey
+          );
+
+      if (!relevant) {
+        continue;
+      }
+
+      const part =
+        QD_SummarizeObject(
+          item,
+          depth + 1,
+          220
+        );
+
+      if (!part) {
+        continue;
+      }
+
+      const line =
+        `${key}=${part}`;
+
+      if (
+        used +
+          line.length +
+          2 >
+        budget
+      ) {
+        break;
+      }
+
+      parts.push(line);
+
+      used +=
+        line.length + 2;
+    }
+
+    return parts.join(
+      "; "
+    );
+  }
+
+  return "";
+}
+
+
+function QD_ReadEventParadox() {
+  /*
+  Only called when EVENT_PARADOX_INSTALLED === true.
+
+  Event Paradox remains the authority over deterministic
+  events, chapters and consequences.
+
+  Quest Director reads state only.
+  */
+
+  const ep =
+    state &&
+    state.eventParadox &&
+    typeof state.eventParadox ===
+      "object"
+      ? state.eventParadox
+      : null;
+
+  if (!ep) {
+    return "";
+  }
+
+  const summary =
+    QD_SummarizeObject(
+      ep,
+      0,
+      1400
+    );
+
+  return summary
+    ? `[EP] ${summary}`
+    : "";
+}
+
+
+/* ============================================================
+   INTEGRATION: KARMA
+   ============================================================ */
+
+function QD_ReadKarma() {
+  /*
+  Only called when KARMA_SYSTEM_INSTALLED === true.
+  */
+
+  if (
+    typeof AID_KARMA ===
+      "undefined" ||
+    !AID_KARMA ||
+    typeof AID_KARMA.status !==
+      "function"
+  ) {
+    return "";
+  }
+
+  try {
+    const raw =
+      AID_KARMA.status();
+
+    if (!raw) {
+      return "";
+    }
+
+    if (
+      typeof raw ===
+        "string"
+    ) {
+      return (
+        "[KARMA] " +
+        QD_Limit(
+          raw,
+          1200
+        )
+      );
+    }
+
+    if (
+      typeof raw ===
+        "object"
+    ) {
+      const wanted = [
+        "karma",
+        "publicScore",
+        "reputation",
+        "publicPerception",
+        "authorities",
+        "alignment",
+        "moralAlignment",
+        "knownDeeds",
+        "deeds"
+      ];
+
+      const parts = [];
+
+      for (
+        const key
+        of wanted
+      ) {
+        if (
+          !(key in raw)
+        ) {
+          continue;
+        }
+
+        const value =
+          raw[key];
+
+        if (
+          Array.isArray(
+            value
+          )
+        ) {
+          parts.push(
+            `${key}=[` +
+            value
+              .slice(-4)
+              .map(
+                QD_Clean
+              )
+              .join(" | ") +
+            "]"
+          );
+        } else if (
+          value &&
+          typeof value ===
+            "object"
+        ) {
+          parts.push(
+            `${key}=` +
+            QD_SummarizeObject(
+              value,
+              1,
+              260
+            )
+          );
+        } else {
+          parts.push(
+            `${key}=` +
+            QD_Clean(
+              value
+            )
+          );
+        }
+      }
+
+      return parts.length
+        ? (
+            "[KARMA] " +
+            QD_Limit(
+              parts.join("; "),
+              1200
+            )
+          )
+        : "";
+    }
+  } catch (_) {}
+
+  return "";
+}
+
+
+/* ============================================================
+   BUILD OPTIONAL SYSTEM INDEX
+   ============================================================ */
+
+function QD_BuildIntegrationIndex() {
+  const rows = [];
+
+  /*
+  IMPORTANT:
+  Every external script reference is reached only from inside
+  its explicit INSTALLED === true guard.
+  */
+
+  if (
+    INNER_SELF_INSTALLED
+  ) {
+    const value =
+      QD_ReadInnerSelf();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  if (
+    AUTO_CARDS_INSTALLED
+  ) {
+    const value =
+      QD_ReadAutoCards();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  if (
+    BASIC_REL_INSTALLED
+  ) {
+    const value =
+      QD_ReadBasicREL();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  if (
+    NPC_SPAWN_SYSTEM_INSTALLED
+  ) {
+    const value =
+      QD_ReadNPCSpawn();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  if (
+    EVENT_PARADOX_INSTALLED
+  ) {
+    const value =
+      QD_ReadEventParadox();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  if (
+    KARMA_SYSTEM_INSTALLED
+  ) {
+    const value =
+      QD_ReadKarma();
+
+    if (value) {
+      rows.push(
+        value
+      );
+    }
+  }
+
+  return QD_Limit(
+    rows.join("\n"),
+    INTEGRATION_MAX_CHARS
+  );
+}
+
+
+/* ============================================================
+   QUEST STATE SERIALIZATION
+   ============================================================ */
+
+function QD_SerializeActiveQuests(s) {
+  if (
+    !s.activeQuests.length
+  ) {
+    return "NONE";
+  }
+
+  return s.activeQuests
+    .map(
+      (quest) =>
+        [
+          `id=${quest.id}`,
+          `kind=${quest.kind}`,
+          `type=${quest.type}`,
+          `score=${quest.score}`,
+          `title=${QD_Limit(
+            quest.title,
+            120
+          )}`,
+          `objective=${QD_Limit(
+            quest.objective,
+            260
+          )}`,
+
+        ].join(" | ")
+    )
+    .join("\n");
+}
+
+
+function QD_SerializeCompletedQuests(s) {
+  if (
+    !s.completedQuests.length
+  ) {
+    return "NONE";
+  }
+
+  return s.completedQuests
+    .slice(-10)
+    .map(
+      (quest) =>
+        [
+          `id=${quest.id}`,
+          `title=${QD_Limit(
+            quest.title,
+            100
+          )}`,
+
+        ].join(" | ")
+    )
+    .join("\n");
+}
+
+
+/* ============================================================
+   MODEL LANGUAGE
+   ============================================================ */
+
+function QD_BuildLanguageInstruction() {
+  if (
+    QUEST_LANGUAGE ===
+      "es"
+  ) {
+    return (
+      "Write all quest display text in natural Spanish."
+    );
+  }
+
+  if (
+    QUEST_LANGUAGE ===
+      "en"
+  ) {
+    return (
+      "Write all quest display text in natural English."
+    );
+  }
+
+  return (
+    "Use the dominant language of the current story and player input for quest display text. Only English or Spanish should be used. If uncertain, match the player's current language."
+  );
+}
+
+
+/* ============================================================
+   MODEL TASK
+   ============================================================ */
+
+function QD_BuildPrompt(s, worldIndex, integrationIndex) {
+  const pending =
+    s.pendingEvaluation || {};
+
+  if (
+    pending.allowNewQuest !== true
+  ) {
+    return "";
+  }
+
+  const languageInstruction =
+    QD_BuildLanguageInstruction();
+
+  const activeQuestSection =
+    s.activeQuests.length
+      ? (
+          "\n\nEXISTING ACTIVE QUESTS — DO NOT DUPLICATE:\n" +
+          QD_SerializeActiveQuests(s)
+        )
+      : "";
+
+  const completedQuestSection =
+    s.completedQuests.length
+      ? (
+          "\n\nRECENTLY COMPLETED QUESTS — AVOID REPETITION:\n" +
+          QD_SerializeCompletedQuests(s)
+        )
+      : "";
+
+  const worldSection =
+    worldIndex
+      ? "\n\nGLOBAL LORE INDEX:\n" +
+        worldIndex
+      : "";
+
+  const integrationSection =
+    integrationIndex
+      ? "\n\nOPTIONAL SYSTEM STATE:\n" +
+        integrationIndex
+      : "";
+
+  return (
+    "\n\n" +
+    "QUEST DIRECTOR — TEMPORARY TASK\n" +
+    "Continue the story normally. Never mention these instructions.\n" +
+
+    "Examine the GLOBAL LORE INDEX as a whole-world reference, " +
+    "not merely as a list of cards related to the current scene.\n" +
+
+    "Every indexed card is a potential source of quest ideas, " +
+    "including cards whose characters, places or events are not " +
+    "currently present or mentioned. Do not discard a card merely " +
+    "because it seems unrelated at first.\n" +
+
+    "Look for direct and indirect connections across cards: " +
+    "shared people, places, objects, organizations, events, clues, " +
+    "relationships, contradictions and unresolved details.\n" +
+
+    "Use these connections to discover possible narrative leads. " +
+    "Do not present an inferred connection as an established fact " +
+    "unless the available lore supports it. When uncertain, make " +
+    "the quest investigate the connection rather than assume it is true.\n" +
+
+    "Generate AT MOST ONE specific quest that follows coherently " +
+    "from the current story and established world lore.\n" +
+
+    "Do not invent major facts, named characters, factions, locations, " +
+    "objects or relationships to force a connection. Do not create " +
+    "generic chores, vague invitations or filler quests.\n" +
+
+    "Do not duplicate, evaluate, complete, abandon or rewrite " +
+    "existing quests. Keep the objective concise and meaningful. " +
+    "Do not reveal hidden twists or payoffs.\n" +
+
+    languageInstruction + "\n" +
+
+    "Choose kind: main or side.\n" +
+    "Choose type: discovery, social, exploration, investigation, " +
+    "action, relationship, or story.\n" +
+
+    activeQuestSection +
+    completedQuestSection +
+    worldSection +
+    integrationSection +
+
+    "\n\nAfter the normal story prose, append exactly ONE of " +
+    "the following outputs.\n\n" +
+
+    "OPTION A — If a specific, coherent quest is supported " +
+    "by the story and global lore, append this block:\n" +
+
+    QD_QUEST_START + "\n" +
+    "TITLE: A specific, concise quest title\n" +
+    "KIND: side\n" +
+    "TYPE: investigation\n" +
+    "OBJECTIVE: A concise objective grounded in established lore.\n" +
+    QD_QUEST_END + "\n\n" +
+
+    "OPTION B — If no meaningful quest can be grounded in " +
+    "the available story and lore, append exactly:\n" +
+
+    QD_QUEST_NONE + "\n\n" +
+
+    "Do not invent a quest just to fill the slot. " +
+    "Do not output both options. Do not use Markdown fences."
+  );
+}
+
+
+/* ============================================================
+   RESULT PARSER
+   ============================================================ */
+
+function QD_ExtractQuest(text) {
+  const source =
+    QD_String(text);
+
+  const start =
+    source.lastIndexOf(
+      QD_QUEST_START
+    );
+
+  const noneAt =
+    source.lastIndexOf(
+      QD_QUEST_NONE
+    );
+
+  if (
+    noneAt >= 0 &&
+    (
+      start < 0 ||
+      noneAt > start
+    )
+  ) {
+    return {
+      found: true,
+      none: true,
+      cleanText: (
+        source.slice(0, noneAt) +
+        source.slice(
+          noneAt + QD_QUEST_NONE.length
+        )
+      ).trim(),
+      quest: null
+    };
+  }
+
+  if (start < 0) {
+    return {
+      found: false,
+      cleanText: source,
+      quest: null
+    };
+  }
+
+  const bodyStart =
+    start + QD_QUEST_START.length;
+
+  const end =
+    source.indexOf(
+      QD_QUEST_END,
+      bodyStart
+    );
+
+  if (end < 0) {
+    return {
+      found: false,
+      cleanText: source,
+      quest: null
+    };
+  }
+
+  const block =
+    source.slice(
+      bodyStart,
+      end
+    );
+
+  function readField(name) {
+    const escapedName =
+      name.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+      );
+
+    const match =
+      block.match(
+        new RegExp(
+          "(?:^|\\n)\\s*" +
+          escapedName +
+          "\\s*:\\s*(.*)",
+          "i"
+        )
+      );
+
+    return match
+      ? QD_Clean(match[1])
+      : "";
+  }
+
+  const quest = {
+    title: readField("TITLE"),
+    kind: readField("KIND"),
+    type: readField("TYPE"),
+    objective: readField("OBJECTIVE")
+  };
+
+  const cleanText = (
+    source.slice(0, start) +
+    source.slice(
+      end + QD_QUEST_END.length
+    )
+  ).trim();
+
+  return {
+    found: true,
+    cleanText,
+    quest
+  };
+}
+
+
+/* ============================================================
+   QUEST VALIDATION
+   ============================================================ */
+
+function QD_ValidQuestCandidate(candidate) {
+  if (
+    !candidate ||
+    typeof candidate !== "object"
+  ) {
+    return false;
+  }
+
+  candidate.title =
+    QD_Clean(candidate.title);
+
+  candidate.objective =
+    QD_Clean(candidate.objective);
+
+  if (
+    candidate.title.length < 2 ||
+    candidate.objective.length < 4
+  ) {
+    return false;
+  }
+
+  let kind =
+    QD_Lower(candidate.kind) || "side";
+
+  let type =
+    QD_Lower(candidate.type) || "story";
+
+  if (
+    !["main", "side"].includes(kind)
+  ) {
+    kind = "side";
+  }
+
+  if (
+    !QD_VALID_TYPES.includes(type)
+  ) {
+    type = "story";
+  }
+
+  if (
+    kind === "main" &&
+    !ALLOW_MAIN_STORY_QUESTS
+  ) {
+    kind = "side";
+  }
+
+  if (
+    kind === "side" &&
+    !ALLOW_SIDE_QUESTS
+  ) {
+    kind = "main";
+  }
+
+  if (
+    (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) ||
+    (kind === "side" && !ALLOW_SIDE_QUESTS)
+  ) {
+    return false;
+  }
+
+  candidate.kind = kind;
+  candidate.type = type;
+
+  return true;
+}
+
+
+/* ============================================================
+   APPLY MODEL RESULT
+   ============================================================ */
+
+function QD_ApplyResult(s, candidate, turn) {
+  if (
+    !s ||
+    !candidate ||
+    typeof candidate !== "object"
+  ) {
+    return false;
+  }
+
+  if (
+    !s.pendingEvaluation ||
+    s.pendingEvaluation.allowNewQuest !== true
+  ) {
+    return false;
+  }
+
+  if (
+    s.activeQuests.length >=
+    MAX_ACTIVE_QUESTS
+  ) {
+    QD_Log(
+      "Quest not created: active quest limit reached."
+    );
+
+    return false;
+  }
+
+  if (
+    !QD_ValidQuestCandidate(candidate)
+  ) {
+    QD_Log(
+      "QUEST_BLOCK_INVALID",
+      candidate
+    );
+
+    return false;
+  }
+
+  if (
+    QD_IsDuplicateQuest(
+      s,
+      candidate.title,
+      candidate.objective
+    )
+  ) {
+    QD_Log(
+      "QUEST_DUPLICATE",
+      {
+        title: candidate.title,
+        objective: candidate.objective
+      }
+    );
+
+    return false;
+  }
+
+  candidate.title =
+    QD_Limit(
+      candidate.title,
+      140
+    );
+
+  candidate.objective =
+    QD_Limit(
+      candidate.objective,
+      320
+    );
+
+  let kind =
+    QD_Lower(candidate.kind);
+
+  let type =
+    QD_Lower(candidate.type);
+
+  if (
+    !["main", "side"].includes(kind)
+  ) {
+    kind = "side";
+  }
+
+  if (
+    !QD_VALID_TYPES.includes(type)
+  ) {
+    type = "story";
+  }
+
+  if (
+    kind === "main" &&
+    !ALLOW_MAIN_STORY_QUESTS
+  ) {
+    kind = "side";
+  }
+
+  if (
+    kind === "side" &&
+    !ALLOW_SIDE_QUESTS
+  ) {
+    kind = "main";
+  }
+
+  if (
+    (kind === "main" && !ALLOW_MAIN_STORY_QUESTS) ||
+    (kind === "side" && !ALLOW_SIDE_QUESTS)
+  ) {
+    QD_Log(
+      "Quest not created: both quest kinds are disabled."
+    );
+
+    return false;
+  }
+
+  const quest = {
+    id: QD_NewQuestId(s, turn),
+    title: candidate.title,
+    objective: candidate.objective,
+    kind,
+    type,
+    score: 50,
+    reason: "Generated from the current story.",
+    createdTurn: turn,
+    expiresTurn:
+      QUEST_EXPIRATION_TURNS > 0
+        ? turn + QUEST_EXPIRATION_TURNS
+        : null
+  };
+
+  s.activeQuests.push(quest);
+  s.lastQuestTurn = turn;
+
+  QD_Log(
+    "QUEST_CREATED",
+    quest
+  );
+
+  return true;
+}
+
+
+/* ============================================================
+   DISPLAY CARD
+   ============================================================ */
+
+function QD_FindDisplayCard() {
+  if (
+    !Array.isArray(storyCards)
+  ) {
+    return null;
+  }
+
+  for (
+    let index = 0;
+    index < storyCards.length;
+    index++
+  ) {
+    if (
+      QD_IsOwnDisplayCard(
+        storyCards[index]
+      )
+    ) {
+      return {
+        card: storyCards[index],
+        index
+      };
+    }
+  }
+
+  return null;
+}
+
+
+function QD_BuildDisplayText(s) {
+  if (
+    !s.activeQuests.length
+  ) {
+    return "";
+  }
+
+  const spanish =
+    s.displayLanguage === "es";
+
+  const lines = [];
+
+  lines.push(
+    spanish
+      ? "📜 Misiones activas"
+      : "📜 Active Quests"
+  );
+
+  lines.push("");
+
+  for (
+    const quest
+    of s.activeQuests
+  ) {
+    const label =
+      quest.kind === "main"
+        ? (
+            spanish
+              ? "Principal"
+              : "Main"
+          )
+        : (
+            spanish
+              ? "Secundaria"
+              : "Side"
+          );
+
+    lines.push(
+      `• ${QD_Limit(
+        quest.title,
+        90
+      )} (${label})`
+    );
+
+    lines.push(
+      QD_Limit(
+        quest.objective,
+        280
+      )
+    );
+
+    lines.push("");
+  }
+
+  lines.push(
+    spanish
+      ? "Las misiones son oportunidades narrativas opcionales. La historia decide qué ocurre después."
+      : "Quests are optional narrative opportunities. The story decides what happens next."
+  );
+
+  return QD_Limit(
+    lines.join("\n"),
+    DISPLAY_MAX_CHARS
+  );
+}
+
+
+function QD_UpdateDisplayCard(s) {
+  const existing =
+    QD_FindDisplayCard();
+
+  QD_Log(
+    "Display card sync started.",
+    {
+      enabled: SHOW_QUEST_DISPLAY,
+      activeQuests: s.activeQuests.length,
+      existingCard: !!existing,
+      storyCardsAvailable: Array.isArray(storyCards)
+    }
+  );
+
+  if (
+    !SHOW_QUEST_DISPLAY ||
+    !s.activeQuests.length
+  ) {
+    if (existing) {
+      try {
+        removeStoryCard(existing.index);
+
+        QD_Log(
+          "Display card removed.",
+          { index: existing.index }
+        );
+      } catch (error) {
+        QD_Log(
+          "Display card removal failed.",
+          error
+        );
+      }
+    }
+
+    return;
+  }
+
+  const entry =
+    QD_BuildDisplayText(s);
+
+  const title =
+    s.displayLanguage === "es"
+      ? "📜 Misiones activas"
+      : "📜 Active Quests";
+
+  try {
+    if (existing) {
+      updateStoryCard(
+        existing.index,
+        QD_DISPLAY_KEY,
+        entry,
+        QD_DISPLAY_TYPE
+      );
+
+      if (storyCards[existing.index]) {
+        storyCards[existing.index].title = title;
+      }
+
+      QD_Log(
+        "Display card updated.",
+        {
+          index: existing.index,
+          title,
+          entryLength: entry.length
+        }
+      );
+
+      return;
+    }
+
+    const newIndex =
+      addStoryCard(
+        QD_DISPLAY_KEY,
+        entry,
+        QD_DISPLAY_TYPE
+      );
+
+    if (
+      newIndex !== false &&
+      Number.isInteger(Number(newIndex)) &&
+      storyCards[Number(newIndex)]
+    ) {
+      storyCards[Number(newIndex)].title = title;
+
+      QD_Log(
+        "Display card created.",
+        {
+          index: Number(newIndex),
+          title,
+          entryLength: entry.length
+        }
+      );
+    } else {
+      QD_Log(
+        "Display card creation returned an unexpected index.",
+        newIndex
+      );
+    }
+  } catch (error) {
+    QD_Log(
+      "Display card error",
+      error
+    );
+  }
+}
+
+
+/* ============================================================
+   PUBLIC QUEST DIRECTOR API
+   ============================================================ */
+
+const QuestDirector = {
+  version: QD_VERSION,
+
+  /* ----------------------------------------------------------
+     INPUT HOOK
+     ---------------------------------------------------------- */
+
+  input(text) {
+    const s =
+      QD_GetState();
+
+    if (
+      !s ||
+      !QUEST_DIRECTOR_ENABLED
+    ) {
+      return text;
+    }
+
+    const turn =
+      QD_Turn();
+
+    const expired =
+      QD_ExpireOldQuests(
+        s,
+        turn
+      );
+
+    /*
+    Completion checks are independent of new-quest activation.
+    Existing active quests need evaluation even when the
+    activation roll fails or a creation cooldown is active.
+    */
+
+    s.pendingEvaluation = null;
+
+    const questCooldownFinished =
+      turn - s.lastQuestTurn >=
+      MIN_TURNS_BETWEEN_QUESTS;
+
+    const attemptCooldownFinished =
+      turn - s.lastEvaluationTurn >=
+      MIN_TURNS_BETWEEN_ATTEMPTS;
+
+    const cooldownFinished =
+      questCooldownFinished &&
+      attemptCooldownFinished;
+
+    const activationRoll =
+      Math.random();
+
+    const activationChance =
+      QD_Clamp(
+        QUEST_ACTIVATION_CHANCE,
+        0,
+        1
+      );
+
+    const capacityAvailable =
+      s.activeQuests.length <
+      MAX_ACTIVE_QUESTS;
+
+    const allowNewQuest =
+      cooldownFinished &&
+      capacityAvailable &&
+      activationRoll < activationChance;
+
+    const shouldEvaluate =
+      allowNewQuest ||
+      s.activeQuests.length > 0;
+
+    QD_Log(
+      "Input evaluation decision.",
+      {
+        turn,
+        activeQuests: s.activeQuests.length,
+        expired,
+        questCooldownFinished,
+        attemptCooldownFinished,
+        cooldownFinished,
+        turnsSinceLastQuest:
+          turn - s.lastQuestTurn,
+        turnsSinceLastEvaluation:
+          turn - s.lastEvaluationTurn,
+        activationChance,
+        activationRoll,
+        capacityAvailable,
+        allowNewQuest,
+        shouldEvaluate
+      }
+    );
+
+    if (shouldEvaluate) {
+      s.pendingEvaluation = {
+        turn,
+        allowNewQuest
+      };
+
+      if (allowNewQuest) {
+        s.lastEvaluationTurn = turn;
+      }
+
+      QD_Log(
+        "Evaluation queued.",
+        s.pendingEvaluation
+      );
+    } else {
+      QD_Log(
+        "Evaluation not queued: no active quests and no new-quest activation.",
+        { turn }
+      );
+    }
+
+    /*
+    Display maintenance is local script work.
+    It does not request an AI generation.
+    */
+
+    if (
+      !SHOW_QUEST_DISPLAY ||
+      expired ||
+      (
+        s.activeQuests.length > 0 &&
+        !QD_FindDisplayCard()
+      )
+    ) {
+      QD_UpdateDisplayCard(s);
+    }
+
+    return text;
+  },
+
+
+  /* ----------------------------------------------------------
+     CONTEXT HOOK
+     ---------------------------------------------------------- */
+
+  context(text) {
+    const s =
+      QD_GetState();
+
+    if (
+      !s ||
+      !QUEST_DIRECTOR_ENABLED
+    ) {
+      return {
+        text,
+        stop: false
+      };
+    }
+
+    if (
+      !s.pendingEvaluation ||
+      s.pendingEvaluation.allowNewQuest !== true
+    ) {
+      return {
+        text,
+        stop: false
+      };
+    }
+
+    const worldIndex =
+      QD_BuildWorldIndex();
+
+    const integrationIndex =
+      QD_BuildIntegrationIndex();
+
+    const prompt =
+      QD_BuildPrompt(
+        s,
+        worldIndex,
+        integrationIndex
+      );
+
+    if (!prompt) {
+      return {
+        text,
+        stop: false
+      };
+    }
+
+    QD_Log(
+      "Temporary quest-generation instruction injected.",
+      {
+        turn: s.pendingEvaluation.turn
+      }
+    );
+
+    return {
+      text: QD_String(text) + "\n\n" + prompt,
+      stop: false
+    };
+  },
+
+
+  /* ----------------------------------------------------------
+     OUTPUT HOOK
+     ---------------------------------------------------------- */
+
+  output(text) {
+    const s =
+      QD_GetState();
+
+    if (
+      !s ||
+      !QUEST_DIRECTOR_ENABLED
+    ) {
+      return text || "\u200B";
+    }
+
+    const turn =
+      QD_Turn();
+
+    QD_ExpireOldQuests(
+      s,
+      turn
+    );
+
+    const parsed =
+      QD_ExtractQuest(text);
+
+    try {
+      if (
+        s.pendingEvaluation &&
+        s.pendingEvaluation.allowNewQuest === true
+      ) {
+        if (parsed.none) {
+          QD_Log(
+            "QUEST_SKIPPED_NO_SUPPORTED_HOOK",
+            { turn }
+          );
+
+        } else if (!parsed.found) {
+          QD_Log(
+            "QUEST_BLOCK_MISSING",
+            {
+              turn,
+              outputLength: QD_String(text).length
+            }
+          );
+
+        } else if (!parsed.quest) {
+          QD_Log(
+            "QUEST_BLOCK_INVALID",
+            {
+              turn,
+              reason: "The quest block could not be parsed."
+            }
+          );
+
+        } else {
+          QD_ApplyResult(
+            s,
+            parsed.quest,
+            turn
+          );
+        }
+      }
+
+      QD_UpdateDisplayCard(s);
+    } catch (error) {
+      QD_Log(
+        "Output processing error.",
+        error
+      );
+    }
+
+    s.pendingEvaluation = null;
+
+    return parsed.found
+      ? (parsed.cleanText || "\u200B")
+      : (text || "\u200B");
+  },
+
+
+  /* ----------------------------------------------------------
+     DISPLAY SYNC
+     ---------------------------------------------------------- */
+
+  syncDisplay() {
+    const s =
+      QD_GetState();
+
+    if (!s) {
+      return;
+    }
+
+    QD_UpdateDisplayCard(s);
+  },
+
+
+  /* ----------------------------------------------------------
+     STATE ACCESS
+     ---------------------------------------------------------- */
+
+  getState() {
+    return QD_GetState();
+  }
+};
