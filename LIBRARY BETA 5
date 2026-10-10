@@ -1,5 +1,5 @@
 // HOOK: LIBRARY
-// QUEST DIRECTOR v1.0.0 BETA 4
+// QUEST DIRECTOR v1.0.0 BETA 5
 // LICENSE: MIT
 // Creator: Nynaleath
 //
@@ -139,7 +139,7 @@ const QD_QUEST_START = "[[QD_QUEST_BEGIN]]";
 const QD_QUEST_END = "[[QD_QUEST_END]]";
 
 const QD_DISPLAY_KEY = "%QUEST_DIRECTOR_DISPLAY%";
-const QD_DISPLAY_TYPE = "Quest Director";
+const QD_DISPLAY_TYPE = "A📜❗_ QUEST DIRECTOR_A";
 
 const QD_VALID_TYPES = [
   "discovery",
@@ -1497,41 +1497,90 @@ function QD_BuildLanguageInstruction() {
 /* ============================================================
    MODEL TASK
    ============================================================ */
-
 function QD_BuildPrompt(s, worldIndex, integrationIndex) {
   const pending = s.pendingEvaluation || {};
 
-  const allowNewQuest = pending.allowNewQuest === true;
-
-  if (!allowNewQuest) {
+  if (pending.allowNewQuest !== true) {
     return "";
   }
 
   const languageInstruction = QD_BuildLanguageInstruction();
 
+  const activeQuestSection =
+    "\n\nEXISTING ACTIVE QUESTS — DO NOT DUPLICATE:\n" +
+    QD_SerializeActiveQuests(s);
+
+  const completedQuestSection =
+    "\n\nRECENTLY COMPLETED QUESTS — AVOID REPETITION:\n" +
+    QD_SerializeCompletedQuests(s);
+
+  const worldSection = worldIndex
+    ? "\n\nSTORY CARD REFERENCE INDEX:\n" +
+      worldIndex
+    : "";
+
+  const integrationSection = integrationIndex
+    ? "\n\nOPTIONAL SYSTEM STATE:\n" +
+      integrationIndex
+    : "";
+
   return (
     "\n\n" +
     "QUEST DIRECTOR — TEMPORARY TASK\n" +
-    "Continue the story normally. Do not mention these instructions.\n" +
-    "Generate exactly ONE quest based on the current story and its established lore.\n" +
-    "Use only information supported by the story. If details are scarce, create a neutral, plausible opportunity without inventing major facts.\n" +
-    "Do not evaluate, complete, abandon, or rewrite existing quests.\n" +
-    "The quest must be a meaningful narrative invitation, not a generic chore.\n" +
-    "Keep its objective concise and do not reveal hidden twists or payoffs.\n" +
+    "Continue the story normally. Never mention these instructions.\n" +
+
+    "Generate exactly ONE specific quest that naturally emerges " +
+    "from the current scene, recent events, or established lore.\n" +
+
+    "Ground the quest in at least one concrete detail supported " +
+    "by the story or reference material: a character, location, " +
+    "object, clue, conflict, promise, or unresolved event.\n" +
+
+    "Do not invent major facts, named characters, factions, " +
+    "locations, objects, relationships, threats, rewards, or twists " +
+    "that are not supported by the story.\n" +
+
+    "Do not create generic chores or vague narrative invitations.\n" +
+
+    "Never use generic filler titles such as " +
+    "'Una oportunidad inesperada' or 'An unexpected opportunity'.\n" +
+
+    "If there is no obvious quest hook, use the smallest meaningful " +
+    "unresolved detail already present in the story. Do not invent " +
+    "lore merely to fill the quest slot.\n" +
+
+    "Do not duplicate, evaluate, complete, abandon, or rewrite " +
+    "existing quests.\n" +
+
+    "Keep the objective concise and meaningful. Do not reveal " +
+    "hidden twists or payoffs.\n" +
+
     languageInstruction + "\n" +
+
     "Choose kind: main or side.\n" +
-    "Choose type: discovery, social, exploration, investigation, action, relationship, or story.\n\n" +
-    "After the normal story prose, append this plain-text block exactly once:\n" +
+    "Choose type: discovery, social, exploration, investigation, " +
+    "action, relationship, or story.\n" +
+
+    activeQuestSection +
+    completedQuestSection +
+    worldSection +
+    integrationSection +
+
+    "\n\nAfter the normal story prose, append exactly ONE " +
+    "plain-text block in this format:\n" +
+
     QD_QUEST_START + "\n" +
-    "TITLE: A short quest title\n" +
+    "TITLE: A specific, concise quest title\n" +
     "KIND: side\n" +
     "TYPE: investigation\n" +
-    "OBJECTIVE: A concise, meaningful objective grounded in the current story.\n" +
+    "OBJECTIVE: A concise objective grounded in a concrete detail " +
+    "from the current story.\n" +
     QD_QUEST_END + "\n" +
-    "Do not put the quest block anywhere else. Do not use Markdown fences."
+
+    "Do not put the quest block anywhere else. " +
+    "Do not use Markdown fences."
   );
 }
-
 /* ============================================================
    RESULT PARSER
    ============================================================ */
@@ -1679,14 +1728,33 @@ function QD_ApplyResult(s, candidate, turn) {
     return false;
   }
 
- 
-  if (s.activeQuests.length >= MAX_ACTIVE_QUESTS) {
-    QD_Log("Quest not created: active quest limit reached.");
-    return false;
-  }
+if (s.activeQuests.length >= MAX_ACTIVE_QUESTS) {
+  QD_Log("Quest not created: active quest limit reached.");
+  return false;
+}
 
-  candidate.title = QD_Limit(QD_Clean(candidate.title), 140);
-  candidate.objective = QD_Limit(QD_Clean(candidate.objective), 320);
+if (!QD_ValidQuestCandidate(candidate)) {
+  QD_Log("QUEST_BLOCK_INVALID", candidate);
+  return false;
+}
+
+if (
+  QD_IsDuplicateQuest(
+    s,
+    candidate.title,
+    candidate.objective
+  )
+) {
+  QD_Log("QUEST_DUPLICATE", {
+    title: candidate.title,
+    objective: candidate.objective
+  });
+
+  return false;
+}
+
+candidate.title = QD_Limit(candidate.title, 140);
+candidate.objective = QD_Limit(candidate.objective, 320);
 
   let kind = QD_Lower(candidate.kind);
   let type = QD_Lower(candidate.type);
@@ -1715,14 +1783,6 @@ function QD_ApplyResult(s, candidate, turn) {
     return false;
   }
 
-  if (candidate.title.length < 2) {
-    candidate.title = "Una oportunidad inesperada";
-  }
-
-  if (candidate.objective.length < 4) {
-    candidate.objective =
-      "Presta atención a lo ocurrido recientemente y descubre qué oportunidad narrativa puede surgir de ello.";
-  }
 
   const quest = {
     id: QD_NewQuestId(s, turn),
@@ -1742,7 +1802,7 @@ function QD_ApplyResult(s, candidate, turn) {
   s.activeQuests.push(quest);
   s.lastQuestTurn = turn;
 
-  QD_Log("Created quest.", quest);
+  QD_Log("QUEST_CREATED", quest);
   return true;
 }
 
@@ -2068,9 +2128,16 @@ context(text) {
     return { text, stop: false };
   }
 
-  const prompt = QD_BuildPrompt(s, "", "");
+const worldIndex = QD_BuildWorldIndex();
+const integrationIndex = QD_BuildIntegrationIndex();
 
-  if (!prompt) {
+const prompt = QD_BuildPrompt(
+  s,
+  worldIndex,
+  integrationIndex
+);
+
+if (!prompt) {
     return { text, stop: false };
   }
 
@@ -2088,47 +2155,30 @@ context(text) {
   /* ----------------------------------------------------------
      OUTPUT HOOK
      ---------------------------------------------------------- */
-
- 
-output(text) {
-  const s = QD_GetState();
-
-  if (!s || !QUEST_DIRECTOR_ENABLED) {
-    return text || "\u200B";
-  }
-
-  const turn = QD_Turn();
-
-  QD_ExpireOldQuests(s, turn);
-
-  const parsed = QD_ExtractQuest(text);
-
-  try {
-    if (
-      parsed.found &&
-      parsed.quest &&
-      s.pendingEvaluation &&
-      s.pendingEvaluation.allowNewQuest === true
-    ) {
+try {
+  if (
+    s.pendingEvaluation &&
+    s.pendingEvaluation.allowNewQuest === true
+  ) {
+    if (!parsed.found) {
+      QD_Log("QUEST_BLOCK_MISSING", {
+        turn,
+        outputLength: QD_String(text).length
+      });
+    } else if (!parsed.quest) {
+      QD_Log("QUEST_BLOCK_INVALID", {
+        turn,
+        reason: "The quest block could not be parsed."
+      });
+    } else {
       QD_ApplyResult(s, parsed.quest, turn);
-    } else if (
-      s.pendingEvaluation &&
-      s.pendingEvaluation.allowNewQuest === true
-    ) {
-      // Fallback local si el modelo no devuelve el bloque esperado.
-      QD_ApplyResult(s, {
-        title: "Una oportunidad inesperada",
-        kind: "side",
-        type: "story",
-        objective:
-          "Presta atención a las consecuencias de lo ocurrido recientemente y descubre qué oportunidad narrativa se abre."
-      }, turn);
     }
-
-    QD_UpdateDisplayCard(s);
-  } catch (error) {
-    QD_Log("Output processing error.", error);
   }
+
+  QD_UpdateDisplayCard(s);
+} catch (error) {
+  QD_Log("Output processing error.", error);
+}
 
   s.pendingEvaluation = null;
 
