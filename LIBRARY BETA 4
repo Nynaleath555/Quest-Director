@@ -135,6 +135,8 @@ const KARMA_SYSTEM_INSTALLED = false;
 const QD_VERSION = "1.0.0";
 
 const QD_STATE_KEY = "questDirector";
+const QD_QUEST_START = "[[QD_QUEST_BEGIN]]";
+const QD_QUEST_END = "[[QD_QUEST_END]]";
 
 const QD_DISPLAY_KEY = "%QUEST_DIRECTOR_DISPLAY%";
 const QD_DISPLAY_TYPE = "Quest Director";
@@ -1527,8 +1529,6 @@ function QD_BuildPrompt(s, worldIndex, integrationIndex) {
     "OBJECTIVE: A concise, meaningful objective grounded in the current story.\n" +
     QD_QUEST_END + "\n" +
     "Do not put the quest block anywhere else. Do not use Markdown fences."
-const QD_QUEST_START = "[[QD_QUEST_BEGIN]]";
-const QD_QUEST_END = "[[QD_QUEST_END]]";
   );
 }
 
