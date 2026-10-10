@@ -3,11 +3,12 @@
 // Creator: Nynaleath
 
 const modifier = (text) => {
-  // YOUR OTHER SCRIPTS' CONTEXT HOOKS GO ABOVE THIS
+  
+// YOUR OTHER SCRIPTS' CONTEXT HOOKS GO ABOVE THIS
 
-  const result = QuestDirector.context(text);
+text = QuestDirector.context(text);
 
-  return result;
+  return { text };
 };
 
 modifier(text);
